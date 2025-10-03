@@ -255,6 +255,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Reset()
 				return m, nil
 			default:
+				re := regexp.MustCompile(`@(\S+)`)
+				matches := re.FindAllStringSubmatch(userInput, -1)
+
+				if len(matches) > 0 {
+					processedInput := userInput
+					for _, match := range matches {
+						fileName := match[1]
+						fileContent, err := os.ReadFile(fileName)
+						if err != nil {
+							continue // Keep @filename as is if file not found
+						}
+						replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
+						processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
+					}
+					userInput = processedInput
+				}
+
 				ctx, cancel := context.WithCancel(context.Background())
 				m.cancel = cancel
 				m.sending = true
