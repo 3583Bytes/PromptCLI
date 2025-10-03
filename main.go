@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,6 +100,7 @@ type model struct {
 	streaming   bool
 	aiResponse  string
 	stream      chan string
+	cancel      context.CancelFunc
 }
 
 func initialModel(apiURL, modelName string) model {
@@ -181,27 +183,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle Enter key for sending message
-		if msg.Type == tea.KeyEnter && m.focused == focusTextarea && !m.sending {
+		if msg.Type == tea.KeyEnter && m.focused == focusTextarea {
 			userInput := strings.TrimSpace(m.textarea.Value())
 			switch userInput {
 			case "/bye":
 				return m, tea.Quit
 			case "/help":
-				m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message"})
-				m.viewport.SetContent(m.renderMessages())
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
+				if !m.sending {
+					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response"})
+					m.viewport.SetContent(m.renderMessages())
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+				}
 				return m, nil
-							default:
-								m.sending = true
-								m.streaming = true
-								m.stream = make(chan string)
-								m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-								m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-								m.viewport.SetContent(m.renderMessages())
-								m.textarea.Reset()
-								m.viewport.GotoBottom()
-								return m, tea.Batch(m.startStreamCmd(), m.waitForStreamCmd())			}
+			case "/stop":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				m.streaming = false
+				m.sending = false
+				if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
+					m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
+				}
+				m.viewport.SetContent(m.renderMessages())
+				m.viewport.GotoBottom()
+				m.textarea.Reset()
+				return m, nil
+			default:
+				if !m.sending {
+					ctx, cancel := context.WithCancel(context.Background())
+					m.cancel = cancel
+					m.sending = true
+					m.streaming = true
+					m.stream = make(chan string)
+					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+					m.viewport.SetContent(m.renderMessages())
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
+				}
+			}
 		}
 
 	case streamChunkMsg:
@@ -298,9 +320,9 @@ func (m model) waitForStreamCmd() tea.Cmd {
 	}
 }
 
-func (m model) startStreamCmd() tea.Cmd {
+func (m model) startStreamCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		go func() {
+		go func(ctx context.Context) {
 			defer close(m.stream)
 
 			req := ChatRequest{
@@ -313,7 +335,12 @@ func (m model) startStreamCmd() tea.Cmd {
 				return
 			}
 
-			resp, err := http.Post(m.apiURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
+			httpReq, err := http.NewRequestWithContext(ctx, "POST", m.apiURL+"/api/chat", bytes.NewBuffer(reqBody))
+			if err != nil {
+				return
+			}
+
+			resp, err := http.DefaultClient.Do(httpReq)
 			if err != nil {
 				return
 			}
@@ -334,7 +361,7 @@ func (m model) startStreamCmd() tea.Cmd {
 					break
 				}
 			}
-		}()
+		}(ctx)
 		return nil
 	}
 }
