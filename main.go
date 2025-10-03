@@ -230,18 +230,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle Enter key for sending message
-		if msg.Type == tea.KeyEnter && m.focused == focusTextarea && !m.sending {
+		if msg.Type == tea.KeyEnter && m.focused == focusTextarea {
 			userInput := strings.TrimSpace(m.textarea.Value())
-			switch userInput {
-			case "/bye":
-				return m, tea.Quit
-			case "/help":
-				m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response"})
-				m.viewport.SetContent(m.renderMessages())
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-				return m, nil
-			case "/stop":
+			if userInput == "/stop" {
 				if m.cancel != nil {
 					m.cancel()
 				}
@@ -254,35 +245,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.GotoBottom()
 				m.textarea.Reset()
 				return m, nil
-			default:
-				re := regexp.MustCompile(`@(\S+)`)
-				matches := re.FindAllStringSubmatch(userInput, -1)
+			}
 
-				if len(matches) > 0 {
-					processedInput := userInput
-					for _, match := range matches {
-						fileName := match[1]
-						fileContent, err := os.ReadFile(fileName)
-						if err != nil {
-							continue // Keep @filename as is if file not found
+			if !m.sending {
+				switch userInput {
+				case "/bye":
+					return m, tea.Quit
+				case "/help":
+					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response"})
+					m.viewport.SetContent(m.renderMessages())
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+					return m, nil
+				default:
+					re := regexp.MustCompile(`@(\S+)`)
+					matches := re.FindAllStringSubmatch(userInput, -1)
+
+					if len(matches) > 0 {
+						processedInput := userInput
+						for _, match := range matches {
+							fileName := match[1]
+							fileContent, err := os.ReadFile(fileName)
+							if err != nil {
+								continue // Keep @filename as is if file not found
+							}
+							replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
+							processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
 						}
-						replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
-						processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
+						userInput = processedInput
 					}
-					userInput = processedInput
-				}
 
-				ctx, cancel := context.WithCancel(context.Background())
-				m.cancel = cancel
-				m.sending = true
-				m.streaming = true
-				m.stream = make(chan string)
-				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-				m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-				m.viewport.SetContent(m.renderMessages())
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-				return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
+					ctx, cancel := context.WithCancel(context.Background())
+					m.cancel = cancel
+					m.sending = true
+					m.streaming = true
+					m.stream = make(chan string)
+					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+					m.viewport.SetContent(m.renderMessages())
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
+				}
 			}
 		}
 
@@ -323,7 +327,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(taCmd, vpCmd)
 }
-
 func (m *model) renderMessages() string {
 	// Re-create renderer with the correct width, accounting for viewport padding
 	r, _ := glamour.NewTermRenderer(
