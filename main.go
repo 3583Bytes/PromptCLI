@@ -13,7 +13,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,6 +53,30 @@ type TagsResponse struct {
 }
 type Model struct {
 	Name string `json:"name"`
+}
+type ShowModelResponse struct {
+	Details   Details    `json:"details"`
+	ModelInfo ModelInfo  `json:"model_info"`
+}
+type Details struct {
+	Format            string `json:"format"`
+	Family            string `json:"family"`
+	ParameterSize     string `json:"parameter_size"`
+	QuantizationLevel string `json:"quantization_level"`
+}
+type ModelInfo struct {
+	// Generic field that can capture context length regardless of model architecture
+	GenericContextLength interface{} `json:"-"` // This will be set dynamically based on architecture
+	BlockCount        interface{} `json:"llama.block_count,omitempty"`
+	EmbeddingLength   interface{} `json:"llama.embedding_length,omitempty"`
+	VocabSize         interface{} `json:"llama.vocab_size,omitempty"`
+	ParameterCount    int64 `json:"general.parameter_count,omitempty"`
+	Architecture      string `json:"general.architecture,omitempty"`
+	// Architecture-specific fields
+	LlamaContextLength  interface{} `json:"llama.context_length,omitempty"`
+	GemmaContextLength  interface{} `json:"gemma.context_length,omitempty"`
+	MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
+	GptossContextLength interface{} `json:"gptoss.context_length,omitempty"`
 }
 type ChatRequest struct {
 	Model    string    `json:"model"`
@@ -94,21 +120,23 @@ type model struct {
 	glamour          *glamour.TermRenderer
 	apiURL           string
 	modelName        string
+	modelContextSize int64 // Store context window size
 	sending          bool
 	error            error
 	stats            string
 	focused          focusable
 	streaming        bool
 	aiResponse       string
-	stream           chan string
+	stream           chan interface{}
 	cancel           context.CancelFunc
 	fileSearchActive bool
 	fileSearchTerm   string
 	fileSearchResult string
 	files            []string
+	spinner          spinner.Model
 }
 
-func initialModel(apiURL, modelName string) model {
+func initialModel(apiURL, modelName string, contextSize int64) model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -127,6 +155,11 @@ func initialModel(apiURL, modelName string) model {
 	vp.KeyMap.HalfPageDown.SetEnabled(false)
 	vp.KeyMap.PageUp.SetKeys("pgup")
 	vp.KeyMap.PageDown.SetKeys("pgdown")
+
+	// --- Spinner ---
+	s := spinner.New()
+	s.Spinner = spinner.Line
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	// --- Styles ---
 	ta.FocusedStyle.Base = lipgloss.NewStyle().
@@ -154,9 +187,10 @@ func initialModel(apiURL, modelName string) model {
 	return model{
 		textarea:         ta,
 		viewport:         vp,
-		messages:         []Message{{Role: "system", Content: "You are a helpful assistant."}},
+		messages:         []Message{{Role: "system", Content: "You are a senior software engineer and coding assistant. Answer as concisely as possible."}},
 		apiURL:           apiURL,
 		modelName:        modelName,
+		modelContextSize: contextSize,
 		sending:          false,
 		stats:            "",
 		focused:          focusTextarea,
@@ -166,6 +200,7 @@ func initialModel(apiURL, modelName string) model {
 		fileSearchTerm:   "",
 		fileSearchResult: "",
 		files:            fileNames,
+		spinner:          s,
 	}
 }
 
@@ -180,6 +215,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	)
 
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyTab:
@@ -279,13 +318,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancel = cancel
 					m.sending = true
 					m.streaming = true
-					m.stream = make(chan string)
+					m.stream = make(chan interface{})
 					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
 					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 					m.viewport.SetContent(m.renderMessages())
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
-					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
+					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 				}
 			}
 		}
@@ -352,7 +391,9 @@ func (m model) View() string {
 	}
 
 	var footer string
-	if m.fileSearchActive {
+	if m.sending {
+		footer = m.spinner.View() + " Waiting for response..."
+	} else if m.fileSearchActive {
 		footerText := "File search: "
 		if m.fileSearchResult != "" {
 			footerText += m.fileSearchResult
@@ -365,7 +406,15 @@ func (m model) View() string {
 		if m.stats != "" {
 			stats = m.stats
 		}
-		footerText := fmt.Sprintf("Model: %s | %s", m.modelName, stats)
+		
+		var contextInfo string
+		if m.modelContextSize > 0 {
+			contextInfo = fmt.Sprintf("Context: %d", m.modelContextSize)
+		} else {
+			contextInfo = "Context: N/A"
+		}
+		
+		footerText := fmt.Sprintf("Model: %s | %s | %s", m.modelName, contextInfo, stats)
 		footer = footerStyle.Render(footerText)
 	}
 
@@ -386,11 +435,18 @@ func (m model) View() string {
 
 func (m model) waitForStreamCmd() tea.Cmd {
 	return func() tea.Msg {
-		chunk, ok := <-m.stream
+		msg, ok := <-m.stream
 		if !ok {
-			return streamDoneMsg{}
+			return nil // Should not happen, streamDoneMsg is sent before close
 		}
-		return streamChunkMsg(chunk)
+		switch msg := msg.(type) {
+		case string:
+			return streamChunkMsg(msg)
+		case streamDoneMsg:
+			return msg
+		default:
+			return errorMsg{fmt.Errorf("unknown message type: %T", msg)}
+		}
 	}
 }
 
@@ -420,6 +476,9 @@ func (m model) startStreamCmd(ctx context.Context) tea.Cmd {
 			}
 			defer resp.Body.Close()
 
+			startTime := time.Now()
+			var finalResponse ChatResponse
+
 			decoder := json.NewDecoder(resp.Body)
 			for {
 				var chatResp ChatResponse
@@ -432,9 +491,19 @@ func (m model) startStreamCmd(ctx context.Context) tea.Cmd {
 				m.stream <- chatResp.Message.Content
 
 				if chatResp.Done {
+					finalResponse = chatResp
 					break
 				}
 			}
+
+			duration := time.Since(startTime)
+			tokensPerSecond := 0.0
+			if duration.Seconds() > 0 {
+				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
+			}
+			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
+
+			m.stream <- streamDoneMsg{stats: stats}
 		}(ctx)
 		return nil
 	}
@@ -481,8 +550,17 @@ func main() {
 		selectedModel = models[choice-1].Name
 	}
 
+	// Get model details to retrieve context window size
+	modelDetails, err := getModelDetails(baseURL, selectedModel)
+	var contextSize int64 = 0 // Default to 0 if not available
+	if err != nil {
+		log.Printf("Warning: Could not get model details for %s: %v", selectedModel, err)
+	} else if modelDetails != nil {
+		contextSize = extractContextLength(&modelDetails.ModelInfo)
+	}
+
 	// Start the Bubble Tea program
-	p := tea.NewProgram(initialModel(baseURL, selectedModel), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(baseURL, selectedModel, contextSize), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Alas, there's been an error: %v", err)
@@ -501,4 +579,88 @@ func getModels(baseURL string) ([]Model, error) {
 		return nil, err
 	}
 	return tagsResponse.Models, nil
+}
+
+func getModelDetails(baseURL, modelName string) (*ShowModelResponse, error) {
+	// Create request body
+	requestBody, err := json.Marshal(map[string]string{
+		"model": modelName,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.Post(baseURL+"/api/show", "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
+	}
+
+	var modelResponse ShowModelResponse
+	if err := json.NewDecoder(resp.Body).Decode(&modelResponse); err != nil {
+		return nil, err
+	}
+	return &modelResponse, nil
+}
+
+// extractContextLength extracts the context length from the model info based on the architecture
+func extractContextLength(modelInfo *ModelInfo) int64 {
+	// Check architecture-specific fields based on the model architecture
+	arch := strings.ToLower(modelInfo.Architecture)
+	
+	// Try different context length fields based on architecture
+	switch arch {
+	case "llama", "llama2", "llama3":
+		return convertToInteger(modelInfo.LlamaContextLength)
+	case "gemma":
+		return convertToInteger(modelInfo.GemmaContextLength)
+	case "mistral":
+		return convertToInteger(modelInfo.MistralContextLength)
+	case "gptoss": // gpt-oss models
+		return convertToInteger(modelInfo.GptossContextLength)
+	default:
+		// Try all possible fields if architecture isn't recognized
+		if result := convertToInteger(modelInfo.LlamaContextLength); result > 0 {
+			return result
+		}
+		if result := convertToInteger(modelInfo.GemmaContextLength); result > 0 {
+			return result
+		}
+		if result := convertToInteger(modelInfo.MistralContextLength); result > 0 {
+			return result
+		}
+		if result := convertToInteger(modelInfo.GptossContextLength); result > 0 {
+			return result
+		}
+	}
+	
+	return 0
+}
+
+// convertToInteger safely converts an interface{} to int64
+func convertToInteger(value interface{}) int64 {
+	if value == nil {
+		return 0
+	}
+	
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case string:
+		// Try to parse string as integer
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return i
+		}
+		return 0
+	default:
+		return 0
+	}
 }

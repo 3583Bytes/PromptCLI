@@ -1,6 +1,6 @@
 # Prompt CLI
 
-A terminal-based chat interface for interacting with [Ollama](https://ollama.ai) large language models.  
+A terminal-based code assistant & chat interface for interacting with [Ollama](https://ollama.ai) large language models, simillar to Clude Code & Gemini CLI but designed to work with an Ollama service running on your network.  
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and [Glamour](https://github.com/charmbracelet/glamour).
 
 ---
@@ -15,6 +15,7 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss]
   - `/help` – Show available commands  
   - `/bye` – Exit the application  
   - `/stop` – Stop the current response mid-stream  
+  - `@` - Reference a file in the current or sub folder to upload as part of the chat context.
 
 ---
 
@@ -23,6 +24,6 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss]
 Clone this repo and build:
 
 ```bash
-git clone https://github.com/3583Bytes/Prompt-CLI.git
-cd Prompt-CLI
+git clone https://github.com/3583Bytes/PromptCLI.git
+cd PromptCLI
 go build -o prompt-cli.exe main.go
