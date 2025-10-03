@@ -75,6 +75,15 @@ type errorMsg struct{ err error }
 
 // --- Main Application Model ---
 
+var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
+
+type focusable int
+
+const (
+	focusTextarea focusable = iota
+	focusViewport
+)
+
 type model struct {
 	viewport    viewport.Model
 	textarea    textarea.Model
@@ -84,6 +93,8 @@ type model struct {
 	modelName   string
 	sending     bool
 	error       error
+	stats       string
+	focused     focusable
 }
 
 func initialModel(apiURL, modelName string) model {
@@ -110,6 +121,9 @@ func initialModel(apiURL, modelName string) model {
 	ta.FocusedStyle.Base = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("205")) // Orange
+	ta.BlurredStyle.Base = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")) // Gray
 
 	vp.Style = lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
@@ -123,6 +137,8 @@ func initialModel(apiURL, modelName string) model {
 		apiURL:      apiURL,
 		modelName:   modelName,
 		sending:     false,
+		stats:       "",
+		focused:     focusTextarea,
 	}
 }
 
@@ -136,70 +152,74 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		vpCmd tea.Cmd
 	)
 
-	m.textarea, taCmd = m.textarea.Update(msg)
-	m.viewport, vpCmd = m.viewport.Update(msg)
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyEsc:
+			if m.focused == focusTextarea {
+				m.focused = focusViewport
+				m.textarea.Blur()
+			} else {
+				m.focused = focusTextarea
+				m.textarea.Focus()
+			}
+			return m, nil
+		case tea.KeyCtrlC:
 			return m, tea.Quit
-		case tea.KeyEnter:
-			if !m.sending {
-				userInput := strings.TrimSpace(m.textarea.Value())
-				switch userInput {
-				case "/bye":
-					return m, tea.Quit
-				case "/help":
-					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message"})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, nil
-				default:
-					m.sending = true
-					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, m.streamResponse()
-				}
+		}
+
+		if m.focused == focusTextarea {
+			m.textarea, taCmd = m.textarea.Update(msg)
+		} else {
+			m.viewport, vpCmd = m.viewport.Update(msg)
+		}
+
+		// Handle Enter key for sending message
+		if msg.Type == tea.KeyEnter && m.focused == focusTextarea && !m.sending {
+			userInput := strings.TrimSpace(m.textarea.Value())
+			switch userInput {
+			case "/bye":
+				return m, tea.Quit
+			case "/help":
+				m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message"})
+				m.viewport.SetContent(m.renderMessages())
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
+				return m, nil
+			default:
+				m.sending = true
+				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+				m.viewport.SetContent(m.renderMessages())
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
+				return m, m.streamResponse()
 			}
 		}
 
-	// --- Custom Messages ---
 	case responseMsg:
 		m.sending = false
-		// Append AI response content
 		m.messages = append(m.messages, Message{Role: "assistant", Content: msg.content})
-		content := m.renderMessages()
-
-		// Append stats to the conversation view
-		statsContent, _ := glamour.NewTermRenderer(glamour.WithAutoStyle())
-		renderedStats, _ := statsContent.Render(fmt.Sprintf("\n---\n*%s*", msg.stats))
-		m.viewport.SetContent(content + renderedStats)
+		m.viewport.SetContent(m.renderMessages())
+		m.stats = msg.stats
 		m.viewport.GotoBottom()
-		return m, nil
 
 	case errorMsg:
 		m.sending = false
 		m.error = msg.err
-		return m, nil
 
 	case tea.WindowSizeMsg:
-		// 2 characters for side borders (left and right)
 		newWidth := msg.Width - 2
-
-		// textarea content height is 3, plus 2 for top/bottom borders
-		// plus 1 for the newline separator between viewport and textarea
-		textAreaRenderedHeight := m.textarea.Height() + 2
-
-		// an additional 3 characters to compensate for an unknown rendering difference.
+		textAreaRenderedHeight := m.textarea.Height() + 2 + 1
 		m.textarea.SetWidth(newWidth - 2)
 		m.viewport.Width = newWidth
 		m.viewport.Height = msg.Height - textAreaRenderedHeight
 		m.viewport.SetContent(m.renderMessages())
-		return m, nil
+		m.textarea, taCmd = m.textarea.Update(msg)
+		m.viewport, vpCmd = m.viewport.Update(msg)
+
+	default:
+		m.textarea, taCmd = m.textarea.Update(msg)
+		m.viewport, vpCmd = m.viewport.Update(msg)
 	}
 
 	return m, tea.Batch(taCmd, vpCmd)
@@ -229,9 +249,23 @@ func (m model) View() string {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
 
+	stats := "Response time and token stats will appear here."
+	if m.stats != "" {
+		stats = m.stats
+	}
+	footerText := fmt.Sprintf("Model: %s | %s", m.modelName, stats)
+	footer := footerStyle.Render(footerText)
+
+	if m.focused == focusViewport {
+		m.viewport.Style.BorderForeground(lipgloss.Color("205")) // Orange
+	} else {
+		m.viewport.Style.BorderForeground(lipgloss.Color("62")) // Purple
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.viewport.View(),
 		m.textarea.View(),
+		footer,
 	)
 }
 
