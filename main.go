@@ -107,7 +107,8 @@ func initialModel(apiURL, modelName string) model {
 
 	vp.Style = lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color("62")) // Purple
+		BorderForeground(lipgloss.Color("62")). // Purple
+		Padding(0) // Ensure no extra padding that could cause double border effect
 
 	return model{
 		textarea:    ta,
@@ -145,14 +146,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Quit
 				case "/help":
 					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message"})
-					m.renderMessages()
+					m.viewport.SetContent(m.renderMessages())
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
 					return m, nil
 				default:
 					m.sending = true
 					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-					m.renderMessages()
+					m.viewport.SetContent(m.renderMessages())
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
 					return m, m.streamResponse()
@@ -165,12 +166,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sending = false
 		// Append AI response content
 		m.messages = append(m.messages, Message{Role: "assistant", Content: msg.content})
-		m.renderMessages()
+		content := m.renderMessages()
 
 		// Append stats to the conversation view
 		statsContent, _ := glamour.NewTermRenderer(glamour.WithAutoStyle())
 		renderedStats, _ := statsContent.Render(fmt.Sprintf("\n---\n*%s*", msg.stats))
-		m.viewport.SetContent(m.viewport.View() + renderedStats)
+		m.viewport.SetContent(content + renderedStats)
 		m.viewport.GotoBottom()
 		return m, nil
 
@@ -191,14 +192,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea.SetWidth(newWidth - 2)
 		m.viewport.Width = newWidth
 		m.viewport.Height = msg.Height - textAreaRenderedHeight
-		m.renderMessages()
+		m.viewport.SetContent(m.renderMessages())
 		return m, nil
 	}
 
 	return m, tea.Batch(taCmd, vpCmd)
 }
 
-func (m *model) renderMessages() {
+func (m *model) renderMessages() string {
 	// Re-create renderer with the correct width, accounting for viewport padding
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
@@ -214,7 +215,7 @@ func (m *model) renderMessages() {
 		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
 		content.WriteString(md)
 	}
-	m.viewport.SetContent(content.String())
+	return content.String()
 }
 
 func (m model) View() string {
