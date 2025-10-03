@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -71,6 +70,8 @@ type responseMsg struct {
 	content string
 	stats   string
 }
+type streamChunkMsg string
+type streamDoneMsg struct{ stats string }
 type errorMsg struct{ err error }
 
 // --- Main Application Model ---
@@ -95,6 +96,9 @@ type model struct {
 	error       error
 	stats       string
 	focused     focusable
+	streaming   bool
+	aiResponse  string
+	stream      chan string
 }
 
 func initialModel(apiURL, modelName string) model {
@@ -139,6 +143,8 @@ func initialModel(apiURL, modelName string) model {
 		sending:     false,
 		stats:       "",
 		focused:     focusTextarea,
+		streaming:   false,
+		aiResponse:  "",
 	}
 }
 
@@ -186,22 +192,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Reset()
 				m.viewport.GotoBottom()
 				return m, nil
-			default:
-				m.sending = true
-				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-				m.viewport.SetContent(m.renderMessages())
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-				return m, m.streamResponse()
-			}
+							default:
+								m.sending = true
+								m.streaming = true
+								m.stream = make(chan string)
+								m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+								m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+								m.viewport.SetContent(m.renderMessages())
+								m.textarea.Reset()
+								m.viewport.GotoBottom()
+								return m, tea.Batch(m.startStreamCmd(), m.waitForStreamCmd())			}
 		}
 
-	case responseMsg:
-		m.sending = false
-		m.messages = append(m.messages, Message{Role: "assistant", Content: msg.content})
-		m.viewport.SetContent(m.renderMessages())
-		m.stats = msg.stats
-		m.viewport.GotoBottom()
+	case streamChunkMsg:
+		if m.streaming {
+			m.messages[len(m.messages)-1].Content += string(msg)
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, m.waitForStreamCmd()
+		}
+
+	case streamDoneMsg:
+		if m.streaming {
+			m.streaming = false
+			m.sending = false
+			m.stats = msg.stats
+		}
+		return m, nil
 
 	case errorMsg:
 		m.sending = false
@@ -271,53 +288,54 @@ func (m model) View() string {
 
 // --- API Call (As a tea.Cmd) ---
 
-func (m model) streamResponse() tea.Cmd {
+func (m model) waitForStreamCmd() tea.Cmd {
 	return func() tea.Msg {
-		req := ChatRequest{
-			Model:    m.modelName,
-			Messages: m.messages,
-			Stream:   true,
+		chunk, ok := <-m.stream
+		if !ok {
+			return streamDoneMsg{}
 		}
-		reqBody, err := json.Marshal(req)
-		if err != nil {
-			return errorMsg{err}
-		}
+		return streamChunkMsg(chunk)
+	}
+}
 
-		resp, err := http.Post(m.apiURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
-		if err != nil {
-			return errorMsg{err}
-		}
-		defer resp.Body.Close()
+func (m model) startStreamCmd() tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			defer close(m.stream)
 
-		startTime := time.Now()
-		var fullResponse string
-		var finalResponse ChatResponse
-
-		decoder := json.NewDecoder(resp.Body)
-		for {
-			var chatResp ChatResponse
-			if err := decoder.Decode(&chatResp); err == io.EOF {
-				break
-			} else if err != nil {
-				return errorMsg{err}
+			req := ChatRequest{
+				Model:    m.modelName,
+				Messages: m.messages,
+				Stream:   true,
+			}
+			reqBody, err := json.Marshal(req)
+			if err != nil {
+				return
 			}
 
-			fullResponse += chatResp.Message.Content
-
-			if chatResp.Done {
-				finalResponse = chatResp
-				break
+			resp, err := http.Post(m.apiURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
+			if err != nil {
+				return
 			}
-		}
+			defer resp.Body.Close()
 
-		duration := time.Since(startTime)
-		tokensPerSecond := 0.0
-		if duration.Seconds() > 0 {
-			tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
-		}
-		stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
+			decoder := json.NewDecoder(resp.Body)
+			for {
+				var chatResp ChatResponse
+				if err := decoder.Decode(&chatResp); err == io.EOF {
+					break
+				} else if err != nil {
+					break
+				}
 
-		return responseMsg{content: fullResponse, stats: stats}
+				m.stream <- chatResp.Message.Content
+
+				if chatResp.Done {
+					break
+				}
+			}
+		}()
+		return nil
 	}
 }
 
