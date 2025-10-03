@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -87,20 +88,24 @@ const (
 )
 
 type model struct {
-	viewport    viewport.Model
-	textarea    textarea.Model
-	messages    []Message
-	glamour     *glamour.TermRenderer
-	apiURL      string
-	modelName   string
-	sending     bool
-	error       error
-	stats       string
-	focused     focusable
-	streaming   bool
-	aiResponse  string
-	stream      chan string
-	cancel      context.CancelFunc
+	viewport         viewport.Model
+	textarea         textarea.Model
+	messages         []Message
+	glamour          *glamour.TermRenderer
+	apiURL           string
+	modelName        string
+	sending          bool
+	error            error
+	stats            string
+	focused          focusable
+	streaming        bool
+	aiResponse       string
+	stream           chan string
+	cancel           context.CancelFunc
+	fileSearchActive bool
+	fileSearchTerm   string
+	fileSearchResult string
+	files            []string
 }
 
 func initialModel(apiURL, modelName string) model {
@@ -136,17 +141,31 @@ func initialModel(apiURL, modelName string) model {
 		BorderForeground(lipgloss.Color("62")). // Purple
 		Padding(0) // Ensure no extra padding that could cause double border effect
 
+	// --- File list ---
+	files, err := os.ReadDir(".")
+	if err != nil {
+		log.Println("could not list files:", err)
+	}
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
+
 	return model{
-		textarea:    ta,
-		viewport:    vp,
-		messages:    []Message{{Role: "system", Content: "You are a helpful assistant."}},
-		apiURL:      apiURL,
-		modelName:   modelName,
-		sending:     false,
-		stats:       "",
-		focused:     focusTextarea,
-		streaming:   false,
-		aiResponse:  "",
+		textarea:         ta,
+		viewport:         vp,
+		messages:         []Message{{Role: "system", Content: "You are a helpful assistant."}},
+		apiURL:           apiURL,
+		modelName:        modelName,
+		sending:          false,
+		stats:            "",
+		focused:          focusTextarea,
+		streaming:        false,
+		aiResponse:       "",
+		fileSearchActive: false,
+		fileSearchTerm:   "",
+		fileSearchResult: "",
+		files:            fileNames,
 	}
 }
 
@@ -163,6 +182,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
+		case tea.KeyTab:
+			if m.fileSearchActive && m.fileSearchResult != "" {
+				val := m.textarea.Value()
+				re := regexp.MustCompile(`@\w*$`)
+				newVal := re.ReplaceAllString(val, "@"+m.fileSearchResult)
+				m.textarea.SetValue(newVal)
+				m.fileSearchActive = false
+				m.textarea.CursorEnd()
+			}
 		case tea.KeyEsc:
 			if m.focused == focusTextarea {
 				m.focused = focusViewport
@@ -178,23 +206,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.focused == focusTextarea {
 			m.textarea, taCmd = m.textarea.Update(msg)
+
+			// File search logic
+			val := m.textarea.Value()
+			re := regexp.MustCompile(`@(\w*)$`)
+			matches := re.FindStringSubmatch(val)
+
+			if len(matches) > 1 {
+				m.fileSearchActive = true
+				m.fileSearchTerm = matches[1]
+				m.fileSearchResult = ""
+				for _, f := range m.files {
+					if strings.Contains(strings.ToLower(f), strings.ToLower(m.fileSearchTerm)) {
+						m.fileSearchResult = f
+						break
+					}
+				}
+			} else {
+				m.fileSearchActive = false
+			}
 		} else {
 			m.viewport, vpCmd = m.viewport.Update(msg)
 		}
 
 		// Handle Enter key for sending message
-		if msg.Type == tea.KeyEnter && m.focused == focusTextarea {
+		if msg.Type == tea.KeyEnter && m.focused == focusTextarea && !m.sending {
 			userInput := strings.TrimSpace(m.textarea.Value())
 			switch userInput {
 			case "/bye":
 				return m, tea.Quit
 			case "/help":
-				if !m.sending {
-					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response"})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-				}
+				m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response"})
+				m.viewport.SetContent(m.renderMessages())
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
 				return m, nil
 			case "/stop":
 				if m.cancel != nil {
@@ -203,26 +248,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streaming = false
 				m.sending = false
 				if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
-					m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
+					m.messages[len(m.messages)-1].Content += "\\n\\n--- Canceled ---"
 				}
 				m.viewport.SetContent(m.renderMessages())
 				m.viewport.GotoBottom()
 				m.textarea.Reset()
 				return m, nil
 			default:
-				if !m.sending {
-					ctx, cancel := context.WithCancel(context.Background())
-					m.cancel = cancel
-					m.sending = true
-					m.streaming = true
-					m.stream = make(chan string)
-					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
-				}
+				ctx, cancel := context.WithCancel(context.Background())
+				m.cancel = cancel
+				m.sending = true
+				m.streaming = true
+				m.stream = make(chan string)
+				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+				m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+				m.viewport.SetContent(m.renderMessages())
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
+				return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd())
 			}
 		}
 
@@ -288,12 +331,23 @@ func (m model) View() string {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
 
-	stats := "Response time and token stats will appear here."
-	if m.stats != "" {
-		stats = m.stats
+	var footer string
+	if m.fileSearchActive {
+		footerText := "File search: "
+		if m.fileSearchResult != "" {
+			footerText += m.fileSearchResult
+		} else {
+			footerText += "No matches found"
+		}
+		footer = footerStyle.Render(footerText)
+	} else {
+		stats := "Response time and token stats will appear here."
+		if m.stats != "" {
+			stats = m.stats
+		}
+		footerText := fmt.Sprintf("Model: %s | %s", m.modelName, stats)
+		footer = footerStyle.Render(footerText)
 	}
-	footerText := fmt.Sprintf("Model: %s | %s", m.modelName, stats)
-	footer := footerStyle.Render(footerText)
 
 	if m.focused == focusViewport {
 		m.viewport.Style.BorderForeground(lipgloss.Color("205")) // Orange
