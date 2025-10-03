@@ -99,6 +99,12 @@ func initialModel(apiURL, modelName string) model {
 
 	// --- Viewport (Chat History) ---
 	vp := viewport.New(80, 20) // Default size, will be updated by WindowSizeMsg
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
+	vp.KeyMap.HalfPageUp.SetEnabled(false)
+	vp.KeyMap.HalfPageDown.SetEnabled(false)
+	vp.KeyMap.PageUp.SetKeys("pgup")
+	vp.KeyMap.PageDown.SetKeys("pgdown")
 
 	// --- Styles ---
 	ta.FocusedStyle.Base = lipgloss.NewStyle().
