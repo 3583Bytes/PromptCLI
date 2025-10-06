@@ -222,11 +222,11 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 	}
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		taCmd tea.Cmd
 		vpCmd tea.Cmd
@@ -396,6 +396,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						responseToLLM = fmt.Sprintf("Invalid mode '%s' for write_file command.", mode)
 					}
 
+					m.updateFileList()
+
 					// Send a new message with the result
 					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
 					ctx, cancel := context.WithCancel(context.Background())
@@ -488,7 +490,19 @@ func (m *model) renderMessages() string {
 	return content.String()
 }
 
-func (m model) View() string {
+func (m *model) updateFileList() {
+	files, err := os.ReadDir(".")
+	if err != nil {
+		log.Println("could not list files:", err)
+	}
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
+	m.files = fileNames
+}
+
+func (m *model) View() string {
 	if m.error != nil {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
@@ -536,7 +550,7 @@ func (m model) View() string {
 
 // --- API Call (As a tea.Cmd) ---
 
-func (m model) waitForStreamCmd() tea.Cmd {
+func (m *model) waitForStreamCmd() tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-m.stream
 		if !ok {
@@ -553,7 +567,7 @@ func (m model) waitForStreamCmd() tea.Cmd {
 	}
 }
 
-func (m model) startStreamCmd(ctx context.Context) tea.Cmd {
+func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		go func(ctx context.Context) {
 			defer close(m.stream)
@@ -668,7 +682,8 @@ func main() {
 		log.Printf("Warning: Could not load system prompt: %v", err)
 		systemPrompt = "You are a helpful assistant." // Fallback prompt
 	}
-	p := tea.NewProgram(initialModel(baseURL, selectedModel, contextSize, systemPrompt), tea.WithAltScreen())
+	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
+	p := tea.NewProgram(&m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Alas, there's been an error: %v", err)
