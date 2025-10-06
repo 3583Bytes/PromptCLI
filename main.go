@@ -360,6 +360,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = false
 			m.sending = false
 			m.stats = msg.stats
+
+			// Command execution logic
+			lastMessage := m.messages[len(m.messages)-1]
+			if lastMessage.Role == "assistant" {
+				var llmResponse LLMResponse
+				err := json.Unmarshal([]byte(lastMessage.Content), &llmResponse)
+				if err == nil && llmResponse.Action.Tool == "write_file" {
+					path, _ := llmResponse.Action.Input["path"].(string)
+					content, _ := llmResponse.Action.Input["content"].(string)
+					mode, _ := llmResponse.Action.Input["mode"].(string)
+
+					var responseToLLM string
+
+					if mode == "create_only" {
+						_, err := os.Stat(path)
+						if err == nil {
+							responseToLLM = fmt.Sprintf("File '%s' already exists.", path)
+						} else {
+							err := os.WriteFile(path, []byte(content), 0644)
+							if err != nil {
+								responseToLLM = fmt.Sprintf("Error creating file '%s': %v", path, err)
+							} else {
+								responseToLLM = fmt.Sprintf("File '%s' created successfully.", path)
+							}
+						}
+					} else if mode == "overwrite" {
+						err := os.WriteFile(path, []byte(content), 0644)
+						if err != nil {
+							responseToLLM = fmt.Sprintf("Error writing to file '%s': %v", path, err)
+						} else {
+							responseToLLM = fmt.Sprintf("File '%s' overwritten successfully.", path)
+						}
+					} else {
+						responseToLLM = fmt.Sprintf("Invalid mode '%s' for write_file command.", mode)
+					}
+
+					// Send a new message with the result
+					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
+					ctx, cancel := context.WithCancel(context.Background())
+					m.cancel = cancel
+					m.sending = true
+					m.streaming = true
+					m.stream = make(chan interface{})
+					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+					m.viewport.SetContent(m.renderMessages())
+					m.viewport.GotoBottom()
+					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+				}
+			}
 		}
 		return m, nil
 
