@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -95,6 +96,7 @@ type ChatRequest struct {
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	IsError bool   `json:"-"`
 }
 type ChatResponse struct {
 	Message   Message   `json:"message"`
@@ -123,6 +125,7 @@ type errorMsg struct{ err error }
 // --- Main Application Model ---
 
 var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
+var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // Red
 
 type focusable int
 
@@ -152,6 +155,7 @@ type model struct {
 	fileSearchResult string
 	files            []string
 	spinner          spinner.Model
+	wg               *sync.WaitGroup
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) model {
@@ -173,6 +177,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 	vp.KeyMap.HalfPageDown.SetEnabled(false)
 	vp.KeyMap.PageUp.SetKeys("pgup")
 	vp.KeyMap.PageDown.SetKeys("pgdown")
+	vp.MouseWheelEnabled = true
 
 	// --- Spinner ---
 	s := spinner.New()
@@ -219,6 +224,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		fileSearchResult: "",
 		files:            fileNames,
 		spinner:          s,
+		wg:               &sync.WaitGroup{},
 	}
 }
 
@@ -237,6 +243,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case tea.MouseMsg:
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		return m, vpCmd
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyTab:
@@ -352,10 +361,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages[len(m.messages)-1].Content += string(msg)
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
+			m.wg.Done()
 			return m, m.waitForStreamCmd()
 		}
 
 	case streamDoneMsg:
+		m.wg.Wait() // Wait for all chunks to be processed
 		if m.streaming {
 			m.streaming = false
 			m.sending = false
@@ -366,6 +377,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if lastMessage.Role == "assistant" {
 				var llmResponse LLMResponse
 				err := json.Unmarshal([]byte(lastMessage.Content), &llmResponse)
+				if err != nil {
+					// Send a message to the user with the error
+					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error parsing LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
+					m.viewport.SetContent(m.renderMessages())
+					m.viewport.GotoBottom()
+					return m, nil
+				}
+
 				if err == nil && llmResponse.Action.Tool == "write_file" {
 					path, _ := llmResponse.Action.Input["path"].(string)
 					content, _ := llmResponse.Action.Input["content"].(string)
@@ -450,7 +469,11 @@ func (m *model) renderMessages() string {
 		role := "## " + strings.Title(msg.Role)
 
 		var renderedMsg string
-		if msg.Role == "assistant" {
+		if msg.IsError {
+			md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
+			content.WriteString(errorStyle.Render(md))
+			continue
+		} else if msg.Role == "assistant" {
 			var llmResponse LLMResponse
 			err := json.Unmarshal([]byte(msg.Content), &llmResponse)
 			if err == nil {
@@ -554,7 +577,7 @@ func (m *model) waitForStreamCmd() tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-m.stream
 		if !ok {
-			return nil // Should not happen, streamDoneMsg is sent before close
+			return nil
 		}
 		switch msg := msg.(type) {
 		case string:
@@ -605,6 +628,7 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 					break
 				}
 
+				m.wg.Add(1)
 				m.stream <- chatResp.Message.Content
 
 				if chatResp.Done {
@@ -619,7 +643,6 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
 			}
 			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
-
 			m.stream <- streamDoneMsg{stats: stats}
 		}(ctx)
 		return nil
@@ -683,7 +706,7 @@ func main() {
 		systemPrompt = "You are a helpful assistant." // Fallback prompt
 	}
 	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
-	p := tea.NewProgram(&m, tea.WithAltScreen())
+	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Alas, there's been an error: %v", err)
