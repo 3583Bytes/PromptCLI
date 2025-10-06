@@ -1,14 +1,28 @@
 # Prompt CLI
 
-A terminal-based code assistant & chat interface for interacting with [Ollama](https://ollama.ai) large language models (maybe others in future), simillar to Clude Code & Gemini CLI but designed to work with an Ollama service running on your network.  Currently the focus is to bridge the communication between the LLM and the device rather than creating a fully automatic agent.  For example I want the LLM to be able to look at git commits & diffs, be able to read files, write files etc.
+A terminal-based code assistant & chat interface for interacting with [Ollama](https://ollama.ai) large language models (maybe others in future), simillar to Clude Code & Gemini CLI but designed to work with an Ollama service running on your network.  Currently the focus is to bridge the communication between the LLM and the device rather than creating a fully automatic agent.  This means the workflow is focused on sending a command to the LLM and receiving a command action, rather than creating a loop of commands until a set of tasks is done.  This may change in the future as local LLMs get more powerfull.
 
 ---
 
 ## ✨ How it works
 
-The LLM is forced to use json as it's communication method via Prompt.MD and then the json can be parsed into commands that are executed by Prompt CLI.
+The LLM is forced to use json as it's communication method via Prompt.MD and then the json can be parsed into commands that are executed by Prompt CLI.  Currently supported commands are:
 
-## ✨ Features
+- **list_files** 
+  - purpose: list files in a directory (non-recursive)
+  - input: {"path": "string | null", "glob": "string | null"}
+- **read_file** 
+  - input: {"path": "string", "max_bytes": "integer | null"}
+- **write_file** 
+  - input: {"path": "string", "content": "string", "mode": "overwrite | create_only"}
+- **append_file** 
+  - input: {"path": "string", "content": "string"}
+- **delete_file** 
+  - input: {"path": "string"}
+- **respond** 
+  - input: {"message": "string"}  // normal chat response for the user
+
+## ✨ Current Features
 - **Interactive TUI** for chatting with Ollama models.
 - **Streaming responses** with cancel support (`/stop`).
 - **Configurable default model** via `config.json`.
@@ -22,6 +36,10 @@ The LLM is forced to use json as it's communication method via Prompt.MD and the
   - `@` - Reference a file in the current or sub folder to upload as part of the chat context.
 
 ---
+
+## 📦 Currently Out of Scope
+
+No Agentic Loops that go through a task list.  Also no cashing or diffs or token saving methods, since the model is a local LLM we don't pay per token, we can focus on accuracy rather than saving tokens.
 
 ## 📦 Installation
 

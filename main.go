@@ -405,13 +405,26 @@ func (m *model) renderMessages() string {
 			if err == nil {
 				if llmResponse.Action.Tool == "respond" {
 					if message, ok := llmResponse.Action.Input["message"].(string); ok {
-						renderedMsg = message
+						var objmap map[string]interface{}
+						if err := json.Unmarshal([]byte(message), &objmap); err == nil {
+							prettyJSON, _ := json.MarshalIndent(objmap, "", "  ")
+							renderedMsg = "```json\n" + string(prettyJSON) + "\n```"
+						} else {
+							renderedMsg = message
+						}
 					} else {
 						renderedMsg = msg.Content // Fallback to raw content
 					}
 				} else {
-					inputBytes, _ := json.Marshal(llmResponse.Action.Input)
-					renderedMsg = fmt.Sprintf("Command Received: `%s` with input `%s`", llmResponse.Action.Tool, string(inputBytes))
+					var details []string
+					for key, value := range llmResponse.Action.Input {
+						if key == "content" {
+							details = append(details, fmt.Sprintf("**%s**:\n```\n%v\n```", strings.Title(key), value))
+						} else {
+							details = append(details, fmt.Sprintf("**%s**: `%v`", strings.Title(key), value))
+						}
+					}
+					renderedMsg = fmt.Sprintf("**Command Received**: `%s`\n%s", llmResponse.Action.Tool, strings.Join(details, "\n"))
 				}
 			} else {
 				renderedMsg = msg.Content // Fallback to raw content
