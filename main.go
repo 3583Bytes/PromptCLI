@@ -47,6 +47,15 @@ func loadConfig(path string) (*Config, error) {
 	return config, nil
 }
 
+func loadPrompt(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+
 // --- API Data Structures ---
 type TagsResponse struct {
 	Models []Model `json:"models"`
@@ -93,6 +102,15 @@ type ChatResponse struct {
 	EvalCount int       `json:"eval_count"`
 }
 
+type LLMResponse struct {
+	Version string   `json:"version"`
+	Thoughts []string `json:"thoughts"`
+	Action  struct {
+		Tool  string `json:"tool"`
+		Input map[string]interface{} `json:"input"`
+	} `json:"action"`
+}
+
 // --- Bubble Tea Messages ---
 type responseMsg struct {
 	content string
@@ -136,7 +154,7 @@ type model struct {
 	spinner          spinner.Model
 }
 
-func initialModel(apiURL, modelName string, contextSize int64) model {
+func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -187,7 +205,7 @@ func initialModel(apiURL, modelName string, contextSize int64) model {
 	return model{
 		textarea:         ta,
 		viewport:         vp,
-		messages:         []Message{{Role: "system", Content: "You are a senior software engineer and coding assistant. Answer as concisely as possible."}},
+		messages:         []Message{{Role: "system", Content: systemPrompt}},
 		apiURL:           apiURL,
 		modelName:        modelName,
 		modelContextSize: contextSize,
@@ -379,7 +397,30 @@ func (m *model) renderMessages() string {
 			continue
 		}
 		role := "## " + strings.Title(msg.Role)
-		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
+
+		var renderedMsg string
+		if msg.Role == "assistant" {
+			var llmResponse LLMResponse
+			err := json.Unmarshal([]byte(msg.Content), &llmResponse)
+			if err == nil {
+				if llmResponse.Action.Tool == "respond" {
+					if message, ok := llmResponse.Action.Input["message"].(string); ok {
+						renderedMsg = message
+					} else {
+						renderedMsg = msg.Content // Fallback to raw content
+					}
+				} else {
+					inputBytes, _ := json.Marshal(llmResponse.Action.Input)
+					renderedMsg = fmt.Sprintf("Command Received: `%s` with input `%s`", llmResponse.Action.Tool, string(inputBytes))
+				}
+			} else {
+				renderedMsg = msg.Content // Fallback to raw content
+			}
+		} else {
+			renderedMsg = msg.Content
+		}
+
+		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, renderedMsg))
 		content.WriteString(md)
 	}
 	return content.String()
@@ -560,7 +601,12 @@ func main() {
 	}
 
 	// Start the Bubble Tea program
-	p := tea.NewProgram(initialModel(baseURL, selectedModel, contextSize), tea.WithAltScreen())
+	systemPrompt, err := loadPrompt("Prompt.MD")
+	if err != nil {
+		log.Printf("Warning: Could not load system prompt: %v", err)
+		systemPrompt = "You are a helpful assistant." // Fallback prompt
+	}
+	p := tea.NewProgram(initialModel(baseURL, selectedModel, contextSize, systemPrompt), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Alas, there's been an error: %v", err)
