@@ -156,6 +156,8 @@ type model struct {
 	files            []string
 	spinner          spinner.Model
 	wg               *sync.WaitGroup
+	loggingEnabled   bool
+	logFile          *os.File
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) model {
@@ -225,7 +227,104 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		files:            fileNames,
 		spinner:          s,
 		wg:               &sync.WaitGroup{},
+		loggingEnabled:   false,
+		logFile:          nil,
 	}
+}
+
+func (m *model) setupLogging() {
+	if _, err := os.Stat("logs"); os.IsNotExist(err) {
+		os.Mkdir("logs", 0755)
+	}
+}
+
+func (m *model) logToFile(message string) {
+	if m.loggingEnabled && m.logFile != nil {
+		logger := log.New(m.logFile, "", log.LstdFlags)
+		logger.Println(message)
+	}
+}
+
+func sanitizeJSON(jsonStr string) string {
+	re := regexp.MustCompile(`(?s)"content":\s*@"(.*?)"`) // Use (?s) for multiline
+	return re.ReplaceAllStringFunc(jsonStr, func(match string) string {
+		// Extract the raw content part (group 1)
+		parts := re.FindStringSubmatch(match)
+		if len(parts) < 2 {
+			return match // Should not happen
+		}
+		rawContent := parts[1]
+
+		// Escape the content for JSON
+		var escapedContent strings.Builder
+		for _, r := range rawContent {
+			switch r {
+			case '\\':
+				escapedContent.WriteString("\\\\")
+			case '"':
+				escapedContent.WriteString("\\\"")
+			case '\n':
+				escapedContent.WriteString("\\n")
+			case '\r':
+				escapedContent.WriteString("\\r")
+			case '\t':
+				escapedContent.WriteString("\\t")
+			default:
+				escapedContent.WriteRune(r)
+			}
+		}
+
+		// Reconstruct the corrected JSON part
+		return fmt.Sprintf(`"content": "%s"`, escapedContent.String())
+	})
+}
+
+func fixTruncatedJSON(jsonStr string) string {
+	var stack []rune
+	inString := false
+	
+	for i := 0; i < len(jsonStr); i++ {
+		char := rune(jsonStr[i])
+
+		if char == '"' {
+			// Check for preceding backslashes to determine if the quote is escaped
+			isEscaped := false
+			j := i - 1
+			for j >= 0 && jsonStr[j] == '\\' {
+				isEscaped = !isEscaped
+				j--
+			}
+			if !isEscaped {
+				inString = !inString
+			}
+		}
+
+		if inString {
+			continue
+		}
+
+		switch char {
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '}' {
+				stack = stack[:len(stack)-1]
+			}
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == ']' {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+
+	// Append the missing closing characters in reverse order
+	for i := len(stack) - 1; i >= 0; i-- {
+		jsonStr += string(stack[i])
+	}
+
+	return jsonStr
 }
 
 func (m *model) Init() tea.Cmd {
@@ -318,7 +417,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "/bye":
 					return m, tea.Quit
 				case "/help":
-					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response"})
+					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response\\n/log - Toggle logging to a file"})
+					m.viewport.SetContent(m.renderMessages())
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+					return m, nil
+				case "/log":
+					m.loggingEnabled = !m.loggingEnabled
+					var logMsg string
+					if m.loggingEnabled {
+						var err error
+						m.logFile, err = os.OpenFile("logs/log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+						if err != nil {
+							logMsg = fmt.Sprintf("Error opening log file: %v", err)
+						} else {
+							logMsg = "Logging enabled."
+						}
+					} else {
+						if m.logFile != nil {
+							m.logFile.Close()
+							m.logFile = nil
+						}
+						logMsg = "Logging disabled."
+					}
+					m.messages = append(m.messages, Message{Role: "assistant", Content: logMsg})
 					m.viewport.SetContent(m.renderMessages())
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
@@ -376,8 +498,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			lastMessage := m.messages[len(m.messages)-1]
 			if lastMessage.Role == "assistant" {
 				var llmResponse LLMResponse
-				err := json.Unmarshal([]byte(lastMessage.Content), &llmResponse)
+				m.logToFile(fmt.Sprintf("Raw LLM response: %s", lastMessage.Content))
+
+				// Extract the JSON part of the string, starting from the first '{'
+				jsonStr := lastMessage.Content
+				start := strings.Index(jsonStr, "{")
+				if start == -1 {
+					m.logToFile("No JSON object found in LLM response")
+					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Invalid response from LLM (no JSON object found):\n%s", lastMessage.Content), IsError: true})
+					m.viewport.SetContent(m.renderMessages())
+					m.viewport.GotoBottom()
+					return m, nil
+				}
+				jsonStr = jsonStr[start:]
+
+				// Attempt to fix truncated JSON by appending missing closing characters
+				fixedJSON := fixTruncatedJSON(jsonStr)
+				if len(fixedJSON) != len(jsonStr) {
+					m.logToFile(fmt.Sprintf("Attempted to fix truncated JSON. Original length: %d, New length: %d", len(jsonStr), len(fixedJSON)))
+				}
+				
+				// Sanitize the (potentially fixed) JSON for other issues like C# verbatim strings
+				sanitizedContent := sanitizeJSON(fixedJSON)
+
+				err := json.Unmarshal([]byte(sanitizedContent), &llmResponse)
 				if err != nil {
+					m.logToFile(fmt.Sprintf("Error parsing LLM response: %v", err))
 					// Send a message to the user with the error
 					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error parsing LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
 					m.viewport.SetContent(m.renderMessages())
@@ -706,6 +852,7 @@ func main() {
 		systemPrompt = "You are a helpful assistant." // Fallback prompt
 	}
 	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
+	m.setupLogging()
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	if _, err := p.Run(); err != nil {
