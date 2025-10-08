@@ -24,29 +24,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// --- Config ---
-type Config struct {
-	OllamaServerURL  string `json:"ollama_server_url"`
-	OllamaServerPort int    `json:"ollama_server_port"`
-	DefaultLLM       string `json:"default_llm"`
-}
 
-func loadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	config := &Config{}
-	err = decoder.Decode(config)
-	if err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
 
 func loadPrompt(path string) (string, error) {
 	content, err := os.ReadFile(path)
@@ -799,10 +777,16 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 
 func main() {
 	// Load configuration
-	config, err := loadConfig("config.json")
+	config, err := LoadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
+	
+	// Validate the configuration
+	if err := ValidateConfig(config); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	
 	baseURL := fmt.Sprintf("%s:%d", config.OllamaServerURL, config.OllamaServerPort)
 
 	models, err := getModels(baseURL)
