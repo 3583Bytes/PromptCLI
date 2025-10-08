@@ -167,7 +167,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 	// --- Styles ---
 	ta.FocusedStyle.Base = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("205")) // Orange
+		BorderForeground(lipgloss.Color("12")) // Light Blue
 	ta.BlurredStyle.Base = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("240")) // Gray
