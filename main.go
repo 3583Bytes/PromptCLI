@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"C:/Users/AdamBerent/Documents/Dev/PromptCLI/config"
 )
 
 
@@ -82,14 +83,7 @@ type ChatResponse struct {
 	EvalCount int       `json:"eval_count"`
 }
 
-type LLMResponse struct {
-	Version string   `json:"version"`
-	Thoughts []string `json:"thoughts"`
-	Action  struct {
-		Tool  string `json:"tool"`
-		Input map[string]interface{} `json:"input"`
-	} `json:"action"`
-}
+
 
 // --- Bubble Tea Messages ---
 type responseMsg struct {
@@ -136,9 +130,10 @@ type model struct {
 	wg               *sync.WaitGroup
 	loggingEnabled   bool
 	logFile          *os.File
+	commandHandler   *CommandHandler
 }
 
-func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) model {
+func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) *model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -187,7 +182,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		fileNames = append(fileNames, file.Name())
 	}
 
-	return model{
+	m := &model{
 		textarea:         ta,
 		viewport:         vp,
 		messages:         []Message{{Role: "system", Content: systemPrompt}},
@@ -208,6 +203,9 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		loggingEnabled:   false,
 		logFile:          nil,
 	}
+
+	m.commandHandler = NewCommandHandler(m)
+	return m
 }
 
 func (m *model) setupLogging() {
@@ -509,38 +507,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				if err == nil && llmResponse.Action.Tool == "write_file" {
-					path, _ := llmResponse.Action.Input["path"].(string)
-					content, _ := llmResponse.Action.Input["content"].(string)
-					mode, _ := llmResponse.Action.Input["mode"].(string)
-
-					var responseToLLM string
-
-					if mode == "create_only" {
-						_, err := os.Stat(path)
-						if err == nil {
-							responseToLLM = fmt.Sprintf("File '%s' already exists.", path)
-						} else {
-							err := os.WriteFile(path, []byte(content), 0644)
-							if err != nil {
-								responseToLLM = fmt.Sprintf("Error creating file '%s': %v", path, err)
-							} else {
-								responseToLLM = fmt.Sprintf("File '%s' created successfully.", path)
-							}
-						}
-					} else if mode == "overwrite" {
-						err := os.WriteFile(path, []byte(content), 0644)
-						if err != nil {
-							responseToLLM = fmt.Sprintf("Error writing to file '%s': %v", path, err)
-						} else {
-							responseToLLM = fmt.Sprintf("File '%s' overwritten successfully.", path)
-						}
-					} else {
-						responseToLLM = fmt.Sprintf("Invalid mode '%s' for write_file command.", mode)
-					}
-
-					m.updateFileList()
-
+				if responseToLLM := m.commandHandler.ExecuteCommand(&llmResponse); responseToLLM != "" {
 					// Send a new message with the result
 					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
 					ctx, cancel := context.WithCancel(context.Background())
@@ -554,6 +521,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 				}
 			}
+
 		}
 		return m, nil
 
@@ -777,13 +745,13 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 
 func main() {
 	// Load configuration
-	config, err := LoadConfig("config.json")
+	config, err := config.LoadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
 	
 	// Validate the configuration
-	if err := ValidateConfig(config); err != nil {
+	if err := config.ValidateConfig(config); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 	
@@ -837,7 +805,7 @@ func main() {
 	}
 	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
 	m.setupLogging()
-	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Alas, there's been an error: %v", err)
