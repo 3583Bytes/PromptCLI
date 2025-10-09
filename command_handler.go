@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // LLMResponse represents the structured JSON response from the LLM.
@@ -31,11 +33,9 @@ func (ch *CommandHandler) ExecuteCommand(llmResponse *LLMResponse) string {
 	case "write_file":
 		return ch.handleWriteFile(llmResponse.Action.Input)
 	case "read_file":
-		// To be implemented
-		return "read_file command not implemented yet."
+		return ch.handleReadFile(llmResponse.Action.Input)
 	case "list_files":
-		// To be implemented
-		return "list_files command not implemented yet."
+		return ch.handleListFiles(llmResponse.Action.Input)
 	case "delete_file":
 		// To be implemented
 		return "delete_file command not implemented yet."
@@ -48,6 +48,20 @@ func (ch *CommandHandler) ExecuteCommand(llmResponse *LLMResponse) string {
 	default:
 		return fmt.Sprintf("Unknown command: %s", llmResponse.Action.Tool)
 	}
+}
+
+func (ch *CommandHandler) handleReadFile(input map[string]interface{}) string {
+	path, ok := input["path"].(string)
+	if !ok {
+		return "Error: 'path' not specified or not a string for read_file."
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("Error reading file '%s': %v", path, err)
+	}
+
+	return string(content)
 }
 
 func (ch *CommandHandler) handleWriteFile(input map[string]interface{}) string {
@@ -110,4 +124,41 @@ func (ch *CommandHandler) handleAppendFile(input map[string]interface{}) string 
 
 	ch.model.updateFileList()
 	return fmt.Sprintf("Content appended to file '%s' successfully.", path)
+}
+
+func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
+	ch.model.logToFile(fmt.Sprintf("handleListFiles input: %v", input))
+	path, _ := input["path"].(string)
+	if path == "" {
+		path = "."
+	}
+
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Sprintf("Error reading directory '%s': %v", path, err)
+	}
+
+	var fileNames []string
+	for _, file := range files {
+		fileNames = append(fileNames, file.Name())
+	}
+
+	glob, _ := input["glob"].(string)
+	if glob != "" {
+		var matchedFiles []string
+		for _, fileName := range fileNames {
+			matched, err := filepath.Match(glob, fileName)
+			if err != nil {
+				return fmt.Sprintf("Error matching glob pattern: %v", err)
+			}
+			if matched {
+				matchedFiles = append(matchedFiles, fileName)
+			}
+		}
+		fileNames = matchedFiles
+	}
+
+	result := fmt.Sprintf("Files in '%s':\n%s", path, strings.Join(fileNames, "\n"))
+	ch.model.logToFile(fmt.Sprintf("handleListFiles output: %s", result))
+	return result
 }

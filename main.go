@@ -16,16 +16,15 @@ import (
 	"sync"
 	"time"
 
+	"prompt-cli/config"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"C:/Users/AdamBerent/Documents/Dev/PromptCLI/config"
 )
-
-
 
 func loadPrompt(path string) (string, error) {
 	content, err := os.ReadFile(path)
@@ -35,7 +34,6 @@ func loadPrompt(path string) (string, error) {
 	return string(content), nil
 }
 
-
 // --- API Data Structures ---
 type TagsResponse struct {
 	Models []Model `json:"models"`
@@ -44,8 +42,8 @@ type Model struct {
 	Name string `json:"name"`
 }
 type ShowModelResponse struct {
-	Details   Details    `json:"details"`
-	ModelInfo ModelInfo  `json:"model_info"`
+	Details   Details   `json:"details"`
+	ModelInfo ModelInfo `json:"model_info"`
 }
 type Details struct {
 	Format            string `json:"format"`
@@ -56,16 +54,16 @@ type Details struct {
 type ModelInfo struct {
 	// Generic field that can capture context length regardless of model architecture
 	GenericContextLength interface{} `json:"-"` // This will be set dynamically based on architecture
-	BlockCount        interface{} `json:"llama.block_count,omitempty"`
-	EmbeddingLength   interface{} `json:"llama.embedding_length,omitempty"`
-	VocabSize         interface{} `json:"llama.vocab_size,omitempty"`
-	ParameterCount    int64 `json:"general.parameter_count,omitempty"`
-	Architecture      string `json:"general.architecture,omitempty"`
+	BlockCount           interface{} `json:"llama.block_count,omitempty"`
+	EmbeddingLength      interface{} `json:"llama.embedding_length,omitempty"`
+	VocabSize            interface{} `json:"llama.vocab_size,omitempty"`
+	ParameterCount       int64       `json:"general.parameter_count,omitempty"`
+	Architecture         string      `json:"general.architecture,omitempty"`
 	// Architecture-specific fields
-	LlamaContextLength  interface{} `json:"llama.context_length,omitempty"`
-	GemmaContextLength  interface{} `json:"gemma.context_length,omitempty"`
+	LlamaContextLength   interface{} `json:"llama.context_length,omitempty"`
+	GemmaContextLength   interface{} `json:"gemma.context_length,omitempty"`
 	MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
-	GptossContextLength interface{} `json:"gptoss.context_length,omitempty"`
+	GptossContextLength  interface{} `json:"gptoss.context_length,omitempty"`
 }
 type ChatRequest struct {
 	Model    string    `json:"model"`
@@ -78,12 +76,10 @@ type Message struct {
 	IsError bool   `json:"-"`
 }
 type ChatResponse struct {
-	Message   Message   `json:"message"`
-	Done      bool      `json:"done"`
-	EvalCount int       `json:"eval_count"`
+	Message   Message `json:"message"`
+	Done      bool    `json:"done"`
+	EvalCount int     `json:"eval_count"`
 }
-
-
 
 // --- Bubble Tea Messages ---
 type responseMsg struct {
@@ -97,7 +93,7 @@ type errorMsg struct{ err error }
 // --- Main Application Model ---
 
 var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
-var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // Red
+var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))    // Red
 
 type focusable int
 
@@ -170,7 +166,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 	vp.Style = lipgloss.NewStyle().
 		Border(lipgloss.DoubleBorder()).
 		BorderForeground(lipgloss.Color("62")). // Purple
-		Padding(0) // Ensure no extra padding that could cause double border effect
+		Padding(0)                              // Ensure no extra padding that could cause double border effect
 
 	// --- File list ---
 	files, err := os.ReadDir(".")
@@ -222,43 +218,54 @@ func (m *model) logToFile(message string) {
 }
 
 func sanitizeJSON(jsonStr string) string {
-	re := regexp.MustCompile(`(?s)"content":\s*@"(.*?)"`) // Use (?s) for multiline
-	return re.ReplaceAllStringFunc(jsonStr, func(match string) string {
-		// Extract the raw content part (group 1)
-		parts := re.FindStringSubmatch(match)
-		if len(parts) < 2 {
-			return match // Should not happen
-		}
-		rawContent := parts[1]
+	verbatimStringMarker := `"content": @"`
+	startIndex := strings.Index(jsonStr, verbatimStringMarker)
+	if startIndex == -1 {
+		return jsonStr // No verbatim string found
+	}
 
-		// Escape the content for JSON
-		var escapedContent strings.Builder
-		for _, r := range rawContent {
-			switch r {
-			case '\\':
-				escapedContent.WriteString("\\\\")
-			case '"':
-				escapedContent.WriteString("\\\"")
-			case '\n':
-				escapedContent.WriteString("\\n")
-			case '\r':
-				escapedContent.WriteString("\\r")
-			case '\t':
-				escapedContent.WriteString("\\t")
-			default:
-				escapedContent.WriteRune(r)
-			}
-		}
+	// The verbatim string starts after the marker
+	contentStartIndex := startIndex + len(verbatimStringMarker)
 
-		// Reconstruct the corrected JSON part
-		return fmt.Sprintf(`"content": "%s"`, escapedContent.String())
-	})
+	// Find the closing quote of the verbatim string.
+	// It's the last quote in the string, because we assume the content is the last field.
+	endIndex := strings.LastIndex(jsonStr, `"`)
+	if endIndex <= contentStartIndex {
+		return jsonStr // Something is wrong
+	}
+
+	rawContent := jsonStr[contentStartIndex:endIndex]
+
+	// Escape the content for JSON
+	var escapedContent strings.Builder
+	for _, r := range rawContent {
+		switch r {
+		case '\\':
+			escapedContent.WriteString("\\")
+		case '"':
+			escapedContent.WriteString("\"")
+		case '\n':
+			escapedContent.WriteString("\\n")
+		case '\r':
+			escapedContent.WriteString("\\r")
+		case '\t':
+			escapedContent.WriteString("\\t")
+		default:
+			escapedContent.WriteRune(r)
+		}
+	}
+
+	// Reconstruct the JSON
+	prefix := jsonStr[:startIndex+len(`"content": `)]
+	suffix := jsonStr[endIndex+1:]
+
+	return prefix + `"` + escapedContent.String() + `"` + suffix
 }
 
 func fixTruncatedJSON(jsonStr string) string {
 	var stack []rune
 	inString := false
-	
+
 	for i := 0; i < len(jsonStr); i++ {
 		char := rune(jsonStr[i])
 
@@ -380,7 +387,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streaming = false
 				m.sending = false
 				if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
-					m.messages[len(m.messages)-1].Content += "\\n\\n--- Canceled ---"
+					m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
 				}
 				m.viewport.SetContent(m.renderMessages())
 				m.viewport.GotoBottom()
@@ -393,7 +400,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "/bye":
 					return m, tea.Quit
 				case "/help":
-					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\\n/bye - Exit the application\\n/help - Show this help message\\n/stop - Stop the current response\\n/log - Toggle logging to a file"})
+					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file"})
 					m.viewport.SetContent(m.renderMessages())
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
@@ -493,7 +500,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(fixedJSON) != len(jsonStr) {
 					m.logToFile(fmt.Sprintf("Attempted to fix truncated JSON. Original length: %d, New length: %d", len(jsonStr), len(fixedJSON)))
 				}
-				
+
 				// Sanitize the (potentially fixed) JSON for other issues like C# verbatim strings
 				sanitizedContent := sanitizeJSON(fixedJSON)
 
@@ -508,6 +515,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				if responseToLLM := m.commandHandler.ExecuteCommand(&llmResponse); responseToLLM != "" {
+					m.logToFile(fmt.Sprintf("Response to LLM: %s", responseToLLM))
 					// Send a new message with the result
 					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
 					ctx, cancel := context.WithCancel(context.Background())
@@ -638,14 +646,14 @@ func (m *model) View() string {
 		if m.stats != "" {
 			stats = m.stats
 		}
-		
+
 		var contextInfo string
 		if m.modelContextSize > 0 {
 			contextInfo = fmt.Sprintf("Context: %d", m.modelContextSize)
 		} else {
 			contextInfo = "Context: N/A"
 		}
-		
+
 		footerText := fmt.Sprintf("Model: %s | %s | %s", m.modelName, contextInfo, stats)
 		footer = footerStyle.Render(footerText)
 	}
@@ -745,17 +753,17 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 
 func main() {
 	// Load configuration
-	config, err := config.LoadConfig("config.json")
+	configs, err := config.LoadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
-	
+
 	// Validate the configuration
-	if err := config.ValidateConfig(config); err != nil {
+	if err := config.ValidateConfig(configs); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
-	
-	baseURL := fmt.Sprintf("%s:%d", config.OllamaServerURL, config.OllamaServerPort)
+
+	baseURL := fmt.Sprintf("%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
 
 	models, err := getModels(baseURL)
 	if err != nil {
@@ -766,8 +774,8 @@ func main() {
 	}
 
 	var selectedModel string
-	if config.DefaultLLM != "" {
-		selectedModel = config.DefaultLLM
+	if configs.DefaultLLM != "" {
+		selectedModel = configs.DefaultLLM
 	} else {
 		fmt.Println("Please select a model:")
 		for i, m := range models {
@@ -801,7 +809,7 @@ func main() {
 	systemPrompt, err := loadPrompt("Prompt.MD")
 	if err != nil {
 		log.Printf("Warning: Could not load system prompt: %v", err)
-		systemPrompt = "You are a helpful assistant." // Fallback prompt
+		systemPrompt = "You are a helpful assistant."
 	}
 	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
 	m.setupLogging()
@@ -856,7 +864,7 @@ func getModelDetails(baseURL, modelName string) (*ShowModelResponse, error) {
 func extractContextLength(modelInfo *ModelInfo) int64 {
 	// Check architecture-specific fields based on the model architecture
 	arch := strings.ToLower(modelInfo.Architecture)
-	
+
 	// Try different context length fields based on architecture
 	switch arch {
 	case "llama", "llama2", "llama3":
@@ -882,7 +890,7 @@ func extractContextLength(modelInfo *ModelInfo) int64 {
 			return result
 		}
 	}
-	
+
 	return 0
 }
 
@@ -891,7 +899,7 @@ func convertToInteger(value interface{}) int64 {
 	if value == nil {
 		return 0
 	}
-	
+
 	switch v := value.(type) {
 	case int64:
 		return v
