@@ -74,6 +74,8 @@ type model struct {
 	loggingEnabled   bool
 	logFile          *os.File
 	commandHandler   *CommandHandler
+	history          []string
+	historyCursor    int
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) *model {
@@ -145,6 +147,8 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		wg:               &sync.WaitGroup{},
 		loggingEnabled:   false,
 		logFile:          nil,
+		history:          []string{},
+		historyCursor:    -1,
 	}
 
 	m.commandHandler = NewCommandHandler(m)
@@ -184,6 +188,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, vpCmd
 	case tea.KeyMsg:
 		switch msg.Type {
+		case tea.KeyUp:
+			if m.focused == focusTextarea {
+				if len(m.history) > 0 {
+					if m.historyCursor < len(m.history)-1 {
+						m.historyCursor++
+					}
+					m.textarea.SetValue(m.history[m.historyCursor])
+					m.textarea.CursorEnd()
+				}
+				return m, nil
+			}
+		case tea.KeyDown:
+			if m.focused == focusTextarea {
+				if m.historyCursor > 0 {
+					m.historyCursor--
+					m.textarea.SetValue(m.history[m.historyCursor])
+					m.textarea.CursorEnd()
+				} else {
+					m.historyCursor = -1
+					m.textarea.Reset()
+				}
+				return m, nil
+			}
 		case tea.KeyTab:
 			if m.fileSearchActive && m.fileSearchResult != "" {
 				val := m.textarea.Value()
@@ -235,6 +262,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle Enter key for sending message
 		if msg.Type == tea.KeyEnter && m.focused == focusTextarea {
 			userInput := strings.TrimSpace(m.textarea.Value())
+			if userInput != "" {
+				m.history = append([]string{userInput}, m.history...)
+				if len(m.history) > 5 {
+					m.history = m.history[:5]
+				}
+			}
+			m.historyCursor = -1
 			if userInput == "/stop" {
 				if m.cancel != nil {
 					m.cancel()
