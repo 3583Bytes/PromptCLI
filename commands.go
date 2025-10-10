@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 
@@ -32,6 +36,8 @@ func (ch *CommandHandler) ExecuteCommand(llmResponse *LLMResponse) string {
 		return "delete_file command not implemented yet."
 	case "append_file":
 		return ch.handleAppendFile(llmResponse.Action.Input)
+	case "git":
+		return ch.handleGit(llmResponse.Action.Input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
 		ch.model.logToFile(fmt.Sprintf("LLM responded: %v", llmResponse.Action.Input["message"]))
@@ -152,4 +158,52 @@ func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
 	result := fmt.Sprintf("Files in '%s':\n%s", path, strings.Join(fileNames, "\n"))
 	ch.model.logToFile(fmt.Sprintf("handleListFiles output: %s", result))
 	return result
+}
+
+func (ch *CommandHandler) handleGit(input map[string]interface{}) string {
+	cmd, ok := input["cmd"].(string)
+	if !ok {
+		return "Error: 'cmd' not specified or not a string for git."
+	}
+
+	var args []string
+	if argsVal, ok := input["args"].([]interface{}); ok {
+		for _, arg := range argsVal {
+			if argStr, ok := arg.(string); ok {
+				args = append(args, argStr)
+			}
+		}
+	}
+
+	cwd, _ := input["cwd"].(string)
+	timeout_ms, _ := input["timeout_ms"].(float64)
+	max_bytes, _ := input["max_bytes"].(float64)
+
+	if timeout_ms == 0 {
+		timeout_ms = 5000 // default timeout of 5 seconds
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout_ms)*time.Millisecond)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, "git", append([]string{cmd}, args...)...)
+	command.Dir = cwd
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &out
+	command.Stderr = &stderr
+
+	err := command.Run()
+
+	if err != nil {
+		return fmt.Sprintf("Error executing git command: %v\nStderr: %s", err, stderr.String())
+	}
+
+	output := out.String()
+	if max_bytes > 0 && len(output) > int(max_bytes) {
+		output = output[:int(max_bytes)]
+	}
+
+	return output
 }

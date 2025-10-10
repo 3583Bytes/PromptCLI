@@ -34,7 +34,6 @@ func loadPrompt(path string) (string, error) {
 	return string(content), nil
 }
 
-
 type streamChunkMsg string
 type streamDoneMsg struct{ stats string }
 type errorMsg struct{ err error }
@@ -55,7 +54,6 @@ type model struct {
 	viewport         viewport.Model
 	textarea         textarea.Model
 	messages         []Message
-	glamour          *glamour.TermRenderer
 	apiURL           string
 	modelName        string
 	modelContextSize int64 // Store context window size
@@ -166,9 +164,6 @@ func (m *model) logToFile(message string) {
 	}
 }
 
-
-
-
 func (m *model) Init() tea.Cmd {
 	return textarea.Blink
 }
@@ -197,6 +192,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.SetValue(newVal)
 				m.fileSearchActive = false
 				m.textarea.CursorEnd()
+				return m, nil
 			}
 		case tea.KeyEsc:
 			if m.focused == focusTextarea {

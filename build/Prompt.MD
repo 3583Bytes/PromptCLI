@@ -24,13 +24,17 @@ You may return at most one tool call per turn. The host will execute it and retu
   - input: {"path": "string"}
 - respond
   - input: {"message": "string"}  // normal chat response for the user
+- git
+  - purpose: run read-only git queries compactly
+  - input: {"cmd":"string|null","args":["string",... ]|null,"cwd":"string|null","timeout_ms":integer|null,"max_bytes":integer|null}
+  - notes: Read-only only; ask for confirmation before any mutating action.
 
 ## Output schema (STRICT)
 {
   "version": "1.0",
   "thoughts": ["short internal note(s)"],
   "action": {
-    "tool": "list_files | read_file | write_file | append_file | delete_file | respond",
+    "tool": "list_files | read_file | write_file | append_file | delete_file | respond | git",
     "input": { /* tool-specific JSON */ }
   }
 }
