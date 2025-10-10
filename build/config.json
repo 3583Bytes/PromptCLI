@@ -1,5 +1,5 @@
 {
-  "ollama_server_url": "http://localhost",
+  "ollama_server_url": "http://192.168.1.139",
   "ollama_server_port": 11434,
-  "default_llm": "llama3.2:3b"
+  "default_llm": "gemma3:12b"
 }

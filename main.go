@@ -81,11 +81,6 @@ type ChatResponse struct {
 	EvalCount int     `json:"eval_count"`
 }
 
-// --- Bubble Tea Messages ---
-type responseMsg struct {
-	content string
-	stats   string
-}
 type streamChunkMsg string
 type streamDoneMsg struct{ stats string }
 type errorMsg struct{ err error }
@@ -310,6 +305,41 @@ func fixTruncatedJSON(jsonStr string) string {
 	return jsonStr
 }
 
+func extractJSON(s string) (string, error) {
+	// Find the start of the JSON block
+	startMarker := "```json"
+	startIndex := strings.Index(s, startMarker)
+
+	var jsonContent string
+
+	if startIndex != -1 {
+		// Found ```json marker
+		startIndex += len(startMarker)
+
+		// Find the end of the JSON block
+		endMarker := "```"
+		endIndex := strings.LastIndex(s, endMarker)
+		if endIndex == -1 || endIndex <= startIndex {
+			return "", fmt.Errorf("could not find closing marker for JSON block")
+		}
+		jsonContent = s[startIndex:endIndex]
+	} else {
+		// If no ```json marker, look for a raw JSON object
+		startIndex = strings.Index(s, "{")
+		if startIndex == -1 {
+			return "", fmt.Errorf("no JSON object found in the response")
+		}
+
+		endIndex := strings.LastIndex(s, "}")
+		if endIndex == -1 || endIndex < startIndex {
+			return "", fmt.Errorf("invalid JSON object found in the response")
+		}
+		jsonContent = s[startIndex : endIndex+1]
+	}
+
+	return strings.TrimSpace(jsonContent), nil
+}
+
 func (m *model) Init() tea.Cmd {
 	return textarea.Blink
 }
@@ -483,17 +513,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var llmResponse LLMResponse
 				m.logToFile(fmt.Sprintf("Raw LLM response: %s", lastMessage.Content))
 
-				// Extract the JSON part of the string, starting from the first '{'
-				jsonStr := lastMessage.Content
-				start := strings.Index(jsonStr, "{")
-				if start == -1 {
-					m.logToFile("No JSON object found in LLM response")
-					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Invalid response from LLM (no JSON object found):\n%s", lastMessage.Content), IsError: true})
+				jsonStr, err := extractJSON(lastMessage.Content)
+				if err != nil {
+					m.logToFile(fmt.Sprintf("Error extracting JSON: %v", err))
+					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error extracting JSON from LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
 					m.viewport.SetContent(m.renderMessages())
 					m.viewport.GotoBottom()
 					return m, nil
 				}
-				jsonStr = jsonStr[start:]
 
 				// Attempt to fix truncated JSON by appending missing closing characters
 				fixedJSON := fixTruncatedJSON(jsonStr)
@@ -504,7 +531,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Sanitize the (potentially fixed) JSON for other issues like C# verbatim strings
 				sanitizedContent := sanitizeJSON(fixedJSON)
 
-				err := json.Unmarshal([]byte(sanitizedContent), &llmResponse)
+				err = json.Unmarshal([]byte(sanitizedContent), &llmResponse)
 				if err != nil {
 					m.logToFile(fmt.Sprintf("Error parsing LLM response: %v", err))
 					// Send a message to the user with the error
