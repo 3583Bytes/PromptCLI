@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"strings"
 )
 
@@ -34,7 +34,7 @@ type ModelInfo struct {
 	LlamaContextLength interface{} `json:"llama.context_length,omitempty"`
 	GemmaContextLength interface{} `json:"gemma.context_length,omitempty"`
 
-	MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
+MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
 	GptossContextLength  interface{} `json:"gptoss.context_length,omitempty"`
 }
 type ChatRequest struct {
@@ -53,140 +53,106 @@ type ChatResponse struct {
 	EvalCount int     `json:"eval_count"`
 }
 
+// FlexibleStringSlice can unmarshal a JSON string or array of strings into a slice of strings.
+type FlexibleStringSlice []string
+
+func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		*f = []string{str}
+		return nil
+	}
+
+	var s []string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// If it's not a valid array, we'll just ignore it.
+		*f = []string{}
+		return nil
+	}
+	*f = s
+	return nil
+}
+
+// Action represents the action to be taken by the tool.
+type Action struct {
+	Tool  string                 `json:"tool"`
+	Input map[string]interface{} `json:"input"`
+}
+
 // LLMResponse represents the structured JSON response from the LLM.
 type LLMResponse struct {
-	Version  string   `json:"version"`
-	Thoughts []string `json:"thoughts"`
-	Action   struct {
-		Tool  string                 `json:"tool"`
-		Input map[string]interface{} `json:"input"`
-	} `json:"action"`
-}
-
-func sanitizeJSON(jsonStr string) string {
-	verbatimStringMarker := "\"content\": @\""
-	startIndex := strings.Index(jsonStr, verbatimStringMarker)
-	if startIndex == -1 {
-		return jsonStr // No verbatim string found
-	}
-
-	// The verbatim string starts after the marker
-	contentStartIndex := startIndex + len(verbatimStringMarker)
-
-	// Find the closing quote of the verbatim string.
-	// It's the last quote in the string, because we assume the content is the last field.
-	endIndex := strings.LastIndex(jsonStr, "\"")
-	if endIndex <= contentStartIndex {
-		return jsonStr // Something is wrong
-	}
-
-	rawContent := jsonStr[contentStartIndex:endIndex]
-
-	// Escape the content for JSON
-	var escapedContent strings.Builder
-	for _, r := range rawContent {
-		switch r {
-		case '\\':
-			escapedContent.WriteString("\\")
-		case '"':
-			escapedContent.WriteString("\"")
-		case '\n':
-			escapedContent.WriteString("\\n")
-		case '\r':
-			escapedContent.WriteString("\\r")
-		case '\t':
-			escapedContent.WriteString("\\t")
-		default:
-			escapedContent.WriteRune(r)
-		}
-	}
-
-	// Reconstruct the JSON
-	prefix := jsonStr[:startIndex+len("\"content\": ")]
-	suffix := jsonStr[endIndex+1:]
-
-	return prefix + "\"" + escapedContent.String() + "\"" + suffix
-}
-
-func fixTruncatedJSON(jsonStr string) string {
-	var stack []rune
-	inString := false
-
-	for i := 0; i < len(jsonStr); i++ {
-		char := rune(jsonStr[i])
-
-		if char == '"' {
-			// Check for preceding backslashes to determine if the quote is escaped
-			isEscaped := false
-			j := i - 1
-			for j >= 0 && jsonStr[j] == '\\' {
-				isEscaped = !isEscaped
-				j--
-			}
-			if !isEscaped {
-				inString = !inString
-			}
-		}
-
-		if inString {
-			continue
-		}
-
-		switch char {
-		case '{':
-			stack = append(stack, '}')
-		case '[':
-			stack = append(stack, ']')
-		case '}':
-			if len(stack) > 0 && stack[len(stack)-1] == '}' {
-				stack = stack[:len(stack)-1]
-			}
-		case ']':
-			if len(stack) > 0 && stack[len(stack)-1] == ']' {
-				stack = stack[:len(stack)-1]
-			}
-		}
-	}
-
-	// Append the missing closing characters in reverse order
-	for i := len(stack) - 1; i >= 0; i-- {
-		jsonStr += string(stack[i])
-	}
-
-	return jsonStr
+	Version  string              `json:"version"`
+	Thoughts FlexibleStringSlice `json:"thoughts"`
+	Action   Action              `json:"action"`
 }
 
 func extractJSON(s string) (string, error) {
-	// Find the start of the JSON block
-	startMarker := "```json"
-	startIndex := strings.Index(s, startMarker)
+	s = strings.TrimSpace(s)
 
-	var jsonContent string
+	startIndex := strings.Index(s, "{")
+	if startIndex == -1 {
+		return "{}", nil
+	}
+	s = s[startIndex:]
 
-	if startIndex != -1 {
-		// Found ```json marker
-		startIndex += len(startMarker)
+	var stack []rune
+	inString := false
+	isEscaped := false
 
-		// Find the end of the JSON block
-		endMarker := "```"
-		endIndex := strings.LastIndex(s, endMarker)
-		if endIndex == -1 || endIndex <= startIndex {
-			return "", fmt.Errorf("could not find closing marker for JSON block")
-		}
-		jsonContent = s[startIndex:endIndex]
-	} else {
-		// If no ```json marker, look for a raw JSON object
-		startIndex := strings.Index(s, "{")
-		if startIndex == -1 {
-			return "", fmt.Errorf("no JSON object found in the response")
+	for i, r := range s {
+		if isEscaped {
+			isEscaped = false
+		} else if r == '\\' {
+			isEscaped = true
+		} else if r == '"' {
+			inString = !inString
 		}
 
-		endIndex := strings.LastIndex(s, "}")
-		if endIndex == -1 || endIndex < startIndex {
-			return "", fmt.Errorf("invalid JSON object found in the response")
+		if !inString {
+			switch r {
+			case '{', '[':
+				stack = append(stack, r)
+			case '}' :
+				if len(stack) > 0 && stack[len(stack)-1] == '{' {
+					stack = stack[:len(stack)-1]
+				}
+			case ']':
+				if len(stack) > 0 && stack[len(stack)-1] == '[' {
+					stack = stack[:len(stack)-1]
+				}
+			}
 		}
-		jsonContent = s[startIndex : endIndex+1]
+
+		if len(stack) == 0 && !inString && r == '}' {
+			potentialJSON := s[:i+1]
+			var js map[string]interface{}
+			if json.Unmarshal([]byte(potentialJSON), &js) == nil {
+				return potentialJSON, nil
+			}
+		}
 	}
 
-	return strings.TrimSpace(jsonContent), nil
+	// If we're here, the JSON is likely truncated. Let's try to close it.
+	for len(stack) > 0 {
+		top := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if top == '{' {
+			s += "}"
+		} else if top == '[' {
+			s += "]"
+		}
+	}
+	if inString {
+		s += "\""
+	}
+
+	var js map[string]interface{}
+	if json.Unmarshal([]byte(s), &js) == nil {
+		return s, nil
+	}
+
+	return "{}", nil
 }

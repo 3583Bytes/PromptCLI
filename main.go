@@ -381,16 +381,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				// Attempt to fix truncated JSON by appending missing closing characters
-				fixedJSON := fixTruncatedJSON(jsonStr)
-				if len(fixedJSON) != len(jsonStr) {
-					m.logToFile(fmt.Sprintf("Attempted to fix truncated JSON. Original length: %d, New length: %d", len(jsonStr), len(fixedJSON)))
-				}
-
-				// Sanitize the (potentially fixed) JSON for other issues like C# verbatim strings
-				sanitizedContent := sanitizeJSON(fixedJSON)
-
-				err = json.Unmarshal([]byte(sanitizedContent), &llmResponse)
+				err = json.Unmarshal([]byte(jsonStr), &llmResponse)
 				if err != nil {
 					m.logToFile(fmt.Sprintf("Error parsing LLM response: %v", err))
 					// Send a message to the user with the error
