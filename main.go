@@ -195,6 +195,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, vpCmd
 	case tea.KeyMsg:
 		switch msg.Type {
+		case tea.KeyEnter:
+			if m.focused == focusTextarea {
+				return m.handleEnter()
+			}
 		case tea.KeyUp:
 			if m.focused == focusTextarea {
 				if len(m.history) > 0 {
@@ -264,104 +268,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.viewport, vpCmd = m.viewport.Update(msg)
-		}
-
-		// Handle Enter key for sending message
-		if msg.Type == tea.KeyEnter && m.focused == focusTextarea {
-			userInput := strings.TrimSpace(m.textarea.Value())
-			if userInput != "" {
-				m.history = append([]string{userInput}, m.history...)
-				if len(m.history) > 5 {
-					m.history = m.history[:5]
-				}
-			}
-			m.historyCursor = -1
-			if userInput == "/stop" {
-				if m.cancel != nil {
-					m.cancel()
-				}
-				m.streaming = false
-				m.sending = false
-				if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
-					m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
-				}
-				m.viewport.SetContent(m.renderMessages())
-				m.viewport.GotoBottom()
-				m.textarea.Reset()
-				return m, nil
-			}
-
-			if !m.sending {
-				switch userInput {
-				case "/bye":
-					return m, tea.Quit
-				case "/help":
-					m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file"})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, nil
-				case "/log":
-					m.loggingEnabled = !m.loggingEnabled
-					var logMsg string
-					if m.loggingEnabled {
-						var err error
-						exePath, err := os.Executable()
-						if err != nil {
-							logMsg = fmt.Sprintf("Error getting executable path: %v", err)
-						} else {
-							logPath := filepath.Join(filepath.Dir(exePath), "logs", "log.txt")
-							m.logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-							if err != nil {
-								logMsg = fmt.Sprintf("Error opening log file: %v", err)
-							} else {
-								logMsg = "Logging enabled."
-							}
-						}
-					} else {
-						if m.logFile != nil {
-							m.logFile.Close()
-							m.logFile = nil
-						}
-						logMsg = "Logging disabled."
-					}
-					m.messages = append(m.messages, Message{Role: "assistant", Content: logMsg})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, nil
-				}
-
-				// Default action: send message
-				re := regexp.MustCompile(`@(\S+)`)
-				matches := re.FindAllStringSubmatch(userInput, -1)
-
-				if len(matches) > 0 {
-					processedInput := userInput
-					for _, match := range matches {
-						fileName := match[1]
-						fileContent, err := os.ReadFile(fileName)
-						if err != nil {
-							continue // Keep @filename as is if file not found
-						}
-						replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
-						processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
-					}
-					userInput = processedInput
-				}
-
-				ctx, cancel := context.WithCancel(context.Background())
-				m.cancel = cancel
-				m.sending = true
-				m.streaming = true
-				m.stream = make(chan interface{})
-				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-				m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-				m.viewport.SetContent(m.renderMessages())
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-				return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
-			}
 		}
 
 	case streamChunkMsg:
@@ -444,6 +350,104 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(taCmd, vpCmd)
+}
+
+func (m *model) handleEnter() (tea.Model, tea.Cmd) {
+	userInput := strings.TrimSpace(m.textarea.Value())
+	if userInput != "" {
+		m.history = append([]string{userInput}, m.history...)
+		if len(m.history) > 5 {
+			m.history = m.history[:5]
+		}
+	}
+	m.historyCursor = -1
+	if userInput == "/stop" {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.streaming = false
+		m.sending = false
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
+			m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
+		}
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		m.textarea.Reset()
+		return m, nil
+	}
+
+	if !m.sending {
+		switch userInput {
+		case "/bye":
+			return m, tea.Quit
+		case "/help":
+			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file"})
+			m.viewport.SetContent(m.renderMessages())
+			m.textarea.Reset()
+			m.viewport.GotoBottom()
+			return m, nil
+		case "/log":
+			m.loggingEnabled = !m.loggingEnabled
+			var logMsg string
+			if m.loggingEnabled {
+				var err error
+				exePath, err := os.Executable()
+				if err != nil {
+					logMsg = fmt.Sprintf("Error getting executable path: %v", err)
+				} else {
+					logPath := filepath.Join(filepath.Dir(exePath), "logs", "log.txt")
+					m.logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					if err != nil {
+						logMsg = fmt.Sprintf("Error opening log file: %v", err)
+					} else {
+						logMsg = "Logging enabled."
+					}
+				}
+			} else {
+				if m.logFile != nil {
+					m.logFile.Close()
+					m.logFile = nil
+				}
+				logMsg = "Logging disabled."
+			}
+			m.messages = append(m.messages, Message{Role: "assistant", Content: logMsg})
+			m.viewport.SetContent(m.renderMessages())
+			m.textarea.Reset()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		// Default action: send message
+		re := regexp.MustCompile(`@(\S+)`)
+		matches := re.FindAllStringSubmatch(userInput, -1)
+
+		if len(matches) > 0 {
+			processedInput := userInput
+			for _, match := range matches {
+				fileName := match[1]
+				fileContent, err := os.ReadFile(fileName)
+				if err != nil {
+					continue // Keep @filename as is if file not found
+				}
+				replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
+				processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
+			}
+			userInput = processedInput
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		m.sending = true
+		m.streaming = true
+		m.stream = make(chan interface{})
+		m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+		m.viewport.SetContent(m.renderMessages())
+		m.textarea.Reset()
+		m.viewport.GotoBottom()
+		return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+	}
+	return m, nil
 }
 func (m *model) renderMessages() string {
 	// Re-create renderer with the correct width, accounting for viewport padding
