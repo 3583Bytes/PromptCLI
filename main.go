@@ -195,77 +195,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, vpCmd
 	case tea.KeyMsg:
 		switch msg.Type {
+		case tea.KeyCtrlC:
+			return m, tea.Quit
 		case tea.KeyEnter:
 			if m.focused == focusTextarea {
 				return m.handleEnter()
 			}
-		case tea.KeyUp:
-			if m.focused == focusTextarea {
-				if len(m.history) > 0 {
-					if m.historyCursor < len(m.history)-1 {
-						m.historyCursor++
-					}
-					m.textarea.SetValue(m.history[m.historyCursor])
-					m.textarea.CursorEnd()
-				}
-				return m, nil
-			}
-		case tea.KeyDown:
-			if m.focused == focusTextarea {
-				if m.historyCursor > 0 {
-					m.historyCursor--
-					m.textarea.SetValue(m.history[m.historyCursor])
-					m.textarea.CursorEnd()
-				} else {
-					m.historyCursor = -1
-					m.textarea.Reset()
-				}
-				return m, nil
-			}
+		case tea.KeyUp, tea.KeyDown:
+			return m.handleArrowKeys(msg)
 		case tea.KeyTab:
-			if m.fileSearchActive && m.fileSearchResult != "" {
-				val := m.textarea.Value()
-				re := regexp.MustCompile(`@\w*$`)
-				newVal := re.ReplaceAllString(val, "@"+m.fileSearchResult)
-				m.textarea.SetValue(newVal)
-				m.fileSearchActive = false
-				m.textarea.CursorEnd()
-				return m, nil
-			}
+			return m.handleTabKey()
 		case tea.KeyEsc:
-			if m.focused == focusTextarea {
-				m.focused = focusViewport
-				m.textarea.Blur()
-			} else {
-				m.focused = focusTextarea
-				m.textarea.Focus()
-			}
-			return m, nil
-		case tea.KeyCtrlC:
-			return m, tea.Quit
+			return m.handleEscKey()
 		}
 
 		if m.focused == focusTextarea {
-			m.textarea, taCmd = m.textarea.Update(msg)
-
-			// File search logic
-			val := m.textarea.Value()
-			re := regexp.MustCompile(`@(\w*)$`)
-			matches := re.FindStringSubmatch(val)
-
-			if len(matches) > 1 {
-				m.fileSearchActive = true
-				m.fileSearchTerm = matches[1]
-				m.fileSearchResult = ""
-				for _, f := range m.files {
-					if strings.Contains(strings.ToLower(f), strings.ToLower(m.fileSearchTerm)) {
-						m.fileSearchResult = f
-						break
-					}
-				}
-			} else {
-				m.fileSearchActive = false
-			}
+			return m.handleTextInput(msg)
 		} else {
 			m.viewport, vpCmd = m.viewport.Update(msg)
 		}
@@ -350,6 +295,80 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(taCmd, vpCmd)
+}
+
+func (m *model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.focused != focusTextarea {
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		if len(m.history) > 0 {
+			if m.historyCursor < len(m.history)-1 {
+				m.historyCursor++
+			}
+			m.textarea.SetValue(m.history[m.historyCursor])
+			m.textarea.CursorEnd()
+		}
+	case tea.KeyDown:
+		if m.historyCursor > 0 {
+			m.historyCursor--
+			m.textarea.SetValue(m.history[m.historyCursor])
+			m.textarea.CursorEnd()
+		} else {
+			m.historyCursor = -1
+			m.textarea.Reset()
+		}
+	}
+	return m, nil
+}
+
+func (m *model) handleTabKey() (tea.Model, tea.Cmd) {
+	if m.fileSearchActive && m.fileSearchResult != "" {
+		val := m.textarea.Value()
+		re := regexp.MustCompile(`@\w*$`)
+		newVal := re.ReplaceAllString(val, "@"+m.fileSearchResult)
+		m.textarea.SetValue(newVal)
+		m.fileSearchActive = false
+		m.textarea.CursorEnd()
+	}
+	return m, nil
+}
+
+func (m *model) handleEscKey() (tea.Model, tea.Cmd) {
+	if m.focused == focusTextarea {
+		m.focused = focusViewport
+		m.textarea.Blur()
+	} else {
+		m.focused = focusTextarea
+		m.textarea.Focus()
+	}
+	return m, nil
+}
+
+func (m *model) handleTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var taCmd tea.Cmd
+	m.textarea, taCmd = m.textarea.Update(msg)
+
+	// File search logic
+	val := m.textarea.Value()
+	re := regexp.MustCompile(`@(\w*)$`)
+	matches := re.FindStringSubmatch(val)
+
+	if len(matches) > 1 {
+		m.fileSearchActive = true
+		m.fileSearchTerm = matches[1]
+		m.fileSearchResult = ""
+		for _, f := range m.files {
+			if strings.Contains(strings.ToLower(f), strings.ToLower(m.fileSearchTerm)) {
+				m.fileSearchResult = f
+				break
+			}
+		}
+	} else {
+		m.fileSearchActive = false
+	}
+	return m, taCmd
 }
 
 func (m *model) handleEnter() (tea.Model, tea.Cmd) {
