@@ -16,7 +16,7 @@ import (
 )
 
 type streamChunkMsg string
-type streamDoneMsg struct{ stats string }
+type streamDoneMsg struct{ stats string; finalMessage Message }
 type errorMsg struct{ err error }
 
 func waitForStreamCmd(stream chan interface{}) tea.Cmd {

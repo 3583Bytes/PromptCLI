@@ -22,27 +22,29 @@ func NewCommandHandler(m *model) *CommandHandler {
 }
 
 // ExecuteCommand processes the LLM response and executes the specified command.
-func (ch *CommandHandler) ExecuteCommand(llmResponse *LLMResponse) string {
-	switch llmResponse.Action.Tool {
+func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]interface{}) string {
+	switch toolName {
 	case "write_file":
-		return ch.handleWriteFile(llmResponse.Action.Input)
+		return ch.handleWriteFile(input)
 	case "read_file":
-		return ch.handleReadFile(llmResponse.Action.Input)
+		return ch.handleReadFile(input)
 	case "list_files":
-		return ch.handleListFiles(llmResponse.Action.Input)
+		return ch.handleListFiles(input)
 	case "delete_file":
 		// To be implemented
 		return "delete_file command not implemented yet."
 	case "append_file":
-		return ch.handleAppendFile(llmResponse.Action.Input)
+		return ch.handleAppendFile(input)
 	case "git":
-		return ch.handleGit(llmResponse.Action.Input)
+		return ch.handleGit(input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
-		ch.model.logger.Log(fmt.Sprintf("LLM responded: %v", llmResponse.Action.Input["message"]))
+		if msg, ok := input["message"].(string); ok {
+			ch.model.logger.Log(msg)
+		}
 		return "" // No further action needed from the handler
 	default:
-		return fmt.Sprintf("Unknown command: %s", llmResponse.Action.Tool)
+		return fmt.Sprintf("Unknown command: %s", toolName)
 	}
 }
 

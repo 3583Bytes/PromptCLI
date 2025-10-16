@@ -1,5 +1,6 @@
 {
   "ollama_server_url": "http://192.168.1.139",
   "ollama_server_port": 11434,
-  "default_llm": "gpt-oss:20b"
+  "default_llm": "gpt-oss:20b",
+  "log_enabled": true
 }

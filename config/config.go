@@ -11,6 +11,7 @@ type Config struct {
 	OllamaServerURL  string `json:"ollama_server_url"`
 	OllamaServerPort int    `json:"ollama_server_port"`
 	DefaultLLM       string `json:"default_llm"`
+	LogEnabled       bool   `json:"log_enabled,omitempty"`
 }
 
 // LoadConfig loads the configuration from the specified file path

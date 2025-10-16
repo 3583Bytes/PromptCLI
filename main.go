@@ -73,7 +73,7 @@ type model struct {
 	historyCursor    int
 }
 
-func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string) *model {
+func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool) *model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -145,6 +145,10 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		historyCursor:    -1,
 	}
 
+	if logEnabled {
+		m.logger.Toggle()
+	}
+
 	m.commandHandler = NewCommandHandler(m)
 	return m
 }
@@ -206,31 +210,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats = msg.stats
 
 			// Command execution logic
-			lastMessage := m.messages[len(m.messages)-1]
-			if lastMessage.Role == "assistant" {
+			var toolName string
+			var input map[string]interface{}
+
+			if len(msg.finalMessage.ToolCalls) > 0 {
+				// Prefer the new tool_calls format
+				call := msg.finalMessage.ToolCalls[0] // Assuming one call
+				toolName = call.Function.Name
+				input = call.Function.Arguments
+			} else {
+				// Fallback for older format or non-tool-call messages
 				var llmResponse LLMResponse
-				m.logger.Log(fmt.Sprintf("Raw LLM response: %s", lastMessage.Content))
-
-				jsonStr, err := extractJSON(lastMessage.Content)
-				if err != nil {
-					m.logger.Log(fmt.Sprintf("Error extracting JSON: %v", err))
-					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error extracting JSON from LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
-					m.viewport.SetContent(m.renderMessages())
-					m.viewport.GotoBottom()
-					return m, nil
+				if err := json.Unmarshal([]byte(msg.finalMessage.Content), &llmResponse); err == nil {
+					if llmResponse.Action.Tool != "" {
+						toolName = llmResponse.Action.Tool
+						input = llmResponse.Action.Input
+					}
 				}
+			}
 
-				err = json.Unmarshal([]byte(jsonStr), &llmResponse)
-				if err != nil {
-					m.logger.Log(fmt.Sprintf("Error parsing LLM response: %v", err))
-					// Send a message to the user with the error
-					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error parsing LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
-					m.viewport.SetContent(m.renderMessages())
-					m.viewport.GotoBottom()
-					return m, nil
-				}
-
-				if responseToLLM := m.commandHandler.ExecuteCommand(&llmResponse); responseToLLM != "" {
+			if toolName != "" {
+				if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
 					m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
 					// Send a new message with the result
 					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
@@ -245,9 +245,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 				}
 			}
-
 		}
-		return m, nil
 
 	case errorMsg:
 		m.sending = false
@@ -582,15 +580,22 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 			}
 			defer resp.Body.Close()
 
+			// Use a TeeReader to capture the raw response while it's being decoded.
+			var rawRespBuffer bytes.Buffer
+			teeReader := io.TeeReader(resp.Body, &rawRespBuffer)
+
 			startTime := time.Now()
 			var finalResponse ChatResponse
 
-			decoder := json.NewDecoder(resp.Body)
+			decoder := json.NewDecoder(teeReader)
 			for {
 				var chatResp ChatResponse
 				if err := decoder.Decode(&chatResp); err == io.EOF {
 					break
 				} else if err != nil {
+					m.logger.Log(fmt.Sprintf("Error decoding stream chunk: %v", err))
+					// Log whatever was captured in the buffer before the error
+					m.logger.Log(fmt.Sprintf("Raw LLM response (partial on error): %s", rawRespBuffer.String()))
 					break
 				}
 
@@ -603,13 +608,16 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 				}
 			}
 
+			// Log the complete raw response from the buffer
+			//m.logger.Log(fmt.Sprintf("Raw LLM response: %s", rawRespBuffer.String()))
+
 			duration := time.Since(startTime)
 			tokensPerSecond := 0.0
 			if duration.Seconds() > 0 {
 				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
 			}
 			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
-			m.stream <- streamDoneMsg{stats: stats}
+			m.stream <- streamDoneMsg{stats: stats, finalMessage: finalResponse.Message}
 		}(ctx)
 		return nil
 	}
@@ -677,7 +685,7 @@ func main() {
 		log.Printf("Warning: Could not load system prompt: %v", err)
 		systemPrompt = "You are a helpful assistant."
 	}
-	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
+	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt, configs.LogEnabled)
 	m.logger.Setup()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 

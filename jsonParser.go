@@ -43,9 +43,10 @@ type ChatRequest struct {
 	Stream   bool      `json:"stream"`
 }
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	IsError bool   `json:"-"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	IsError   bool       `json:"-"`
 }
 type ChatResponse struct {
 	Message   Message `json:"message"`
@@ -82,11 +83,23 @@ type Action struct {
 	Input map[string]interface{} `json:"input"`
 }
 
+// ToolCall represents a single tool call from the LLM.
+type ToolCall struct {
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall represents the function to be called.
+type FunctionCall struct {
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments"`
+}
+
 // LLMResponse represents the structured JSON response from the LLM.
 type LLMResponse struct {
-	Version  string              `json:"version"`
-	Thoughts FlexibleStringSlice `json:"thoughts"`
-	Action   Action              `json:"action"`
+	Version   string              `json:"version"`
+	Thoughts  FlexibleStringSlice `json:"thoughts"`
+	Action    Action              `json:"action"`
+	ToolCalls []ToolCall          `json:"tool_calls"`
 }
 
 func extractJSON(s string) (string, error) {
