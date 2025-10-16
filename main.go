@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -156,8 +157,14 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 }
 
 func (m *model) setupLogging() {
-	if _, err := os.Stat("logs"); os.IsNotExist(err) {
-		os.Mkdir("logs", 0755)
+	exePath, err := os.Executable()
+	if err != nil {
+		// Handle error: maybe log to stderr or disable logging
+		return
+	}
+	logDir := filepath.Join(filepath.Dir(exePath), "logs")
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		os.Mkdir(logDir, 0755)
 	}
 }
 
@@ -299,11 +306,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					var logMsg string
 					if m.loggingEnabled {
 						var err error
-						m.logFile, err = os.OpenFile("logs/log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+						exePath, err := os.Executable()
 						if err != nil {
-							logMsg = fmt.Sprintf("Error opening log file: %v", err)
+							logMsg = fmt.Sprintf("Error getting executable path: %v", err)
 						} else {
-							logMsg = "Logging enabled."
+							logPath := filepath.Join(filepath.Dir(exePath), "logs", "log.txt")
+							m.logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+							if err != nil {
+								logMsg = fmt.Sprintf("Error opening log file: %v", err)
+							} else {
+								logMsg = "Logging enabled."
+							}
 						}
 					} else {
 						if m.logFile != nil {
@@ -317,36 +330,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textarea.Reset()
 					m.viewport.GotoBottom()
 					return m, nil
-				default:
-					re := regexp.MustCompile(`@(\S+)`)
-					matches := re.FindAllStringSubmatch(userInput, -1)
-
-					if len(matches) > 0 {
-						processedInput := userInput
-						for _, match := range matches {
-							fileName := match[1]
-							fileContent, err := os.ReadFile(fileName)
-							if err != nil {
-								continue // Keep @filename as is if file not found
-							}
-							replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
-							processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
-						}
-						userInput = processedInput
-					}
-
-					ctx, cancel := context.WithCancel(context.Background())
-					m.cancel = cancel
-					m.sending = true
-					m.streaming = true
-					m.stream = make(chan interface{})
-					m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-					m.viewport.SetContent(m.renderMessages())
-					m.textarea.Reset()
-					m.viewport.GotoBottom()
-					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 				}
+
+				// Default action: send message
+				re := regexp.MustCompile(`@(\S+)`)
+				matches := re.FindAllStringSubmatch(userInput, -1)
+
+				if len(matches) > 0 {
+					processedInput := userInput
+					for _, match := range matches {
+						fileName := match[1]
+						fileContent, err := os.ReadFile(fileName)
+						if err != nil {
+							continue // Keep @filename as is if file not found
+						}
+						replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
+						processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
+					}
+					userInput = processedInput
+				}
+
+				ctx, cancel := context.WithCancel(context.Background())
+				m.cancel = cancel
+				m.sending = true
+				m.streaming = true
+				m.stream = make(chan interface{})
+				m.messages = append(m.messages, Message{Role: "user", Content: userInput})
+				m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+				m.viewport.SetContent(m.renderMessages())
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
+				return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 			}
 		}
 
