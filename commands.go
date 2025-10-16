@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-
 // CommandHandler is responsible for executing commands received from the LLM.
 type CommandHandler struct {
 	model *model
@@ -40,7 +39,7 @@ func (ch *CommandHandler) ExecuteCommand(llmResponse *LLMResponse) string {
 		return ch.handleGit(llmResponse.Action.Input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
-		ch.model.logToFile(fmt.Sprintf("LLM responded: %v", llmResponse.Action.Input["message"]))
+		ch.model.logger.Log(fmt.Sprintf("LLM responded: %v", llmResponse.Action.Input["message"]))
 		return "" // No further action needed from the handler
 	default:
 		return fmt.Sprintf("Unknown command: %s", llmResponse.Action.Tool)
@@ -124,7 +123,7 @@ func (ch *CommandHandler) handleAppendFile(input map[string]interface{}) string 
 }
 
 func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
-	ch.model.logToFile(fmt.Sprintf("handleListFiles input: %v", input))
+	ch.model.logger.Log(fmt.Sprintf("handleListFiles input: %v", input))
 	path, _ := input["path"].(string)
 	if path == "" {
 		path = "."
@@ -156,7 +155,7 @@ func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
 	}
 
 	result := fmt.Sprintf("Files in '%s':\n%s", path, strings.Join(fileNames, "\n"))
-	ch.model.logToFile(fmt.Sprintf("handleListFiles output: %s", result))
+	ch.model.logger.Log(fmt.Sprintf("handleListFiles output: %s", result))
 	return result
 }
 

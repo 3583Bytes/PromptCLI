@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -68,8 +67,7 @@ type model struct {
 	files            []string
 	spinner          spinner.Model
 	wg               *sync.WaitGroup
-	loggingEnabled   bool
-	logFile          *os.File
+	logger           *Logger
 	commandHandler   *CommandHandler
 	history          []string
 	historyCursor    int
@@ -142,33 +140,13 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		files:            fileNames,
 		spinner:          s,
 		wg:               &sync.WaitGroup{},
-		loggingEnabled:   false,
-		logFile:          nil,
+		logger:           NewLogger(),
 		history:          []string{},
 		historyCursor:    -1,
 	}
 
 	m.commandHandler = NewCommandHandler(m)
 	return m
-}
-
-func (m *model) setupLogging() {
-	exePath, err := os.Executable()
-	if err != nil {
-		// Handle error: maybe log to stderr or disable logging
-		return
-	}
-	logDir := filepath.Join(filepath.Dir(exePath), "logs")
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		os.Mkdir(logDir, 0755)
-	}
-}
-
-func (m *model) logToFile(message string) {
-	if m.loggingEnabled && m.logFile != nil {
-		logger := log.New(m.logFile, "", log.LstdFlags)
-		logger.Println(message)
-	}
 }
 
 func (m *model) Init() tea.Cmd {
@@ -231,11 +209,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			lastMessage := m.messages[len(m.messages)-1]
 			if lastMessage.Role == "assistant" {
 				var llmResponse LLMResponse
-				m.logToFile(fmt.Sprintf("Raw LLM response: %s", lastMessage.Content))
+				m.logger.Log(fmt.Sprintf("Raw LLM response: %s", lastMessage.Content))
 
 				jsonStr, err := extractJSON(lastMessage.Content)
 				if err != nil {
-					m.logToFile(fmt.Sprintf("Error extracting JSON: %v", err))
+					m.logger.Log(fmt.Sprintf("Error extracting JSON: %v", err))
 					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error extracting JSON from LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
 					m.viewport.SetContent(m.renderMessages())
 					m.viewport.GotoBottom()
@@ -244,7 +222,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				err = json.Unmarshal([]byte(jsonStr), &llmResponse)
 				if err != nil {
-					m.logToFile(fmt.Sprintf("Error parsing LLM response: %v", err))
+					m.logger.Log(fmt.Sprintf("Error parsing LLM response: %v", err))
 					// Send a message to the user with the error
 					m.messages = append(m.messages, Message{Role: "assistant", Content: fmt.Sprintf("Error parsing LLM response: %v\nRaw content:\n%s", err, lastMessage.Content), IsError: true})
 					m.viewport.SetContent(m.renderMessages())
@@ -253,7 +231,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				if responseToLLM := m.commandHandler.ExecuteCommand(&llmResponse); responseToLLM != "" {
-					m.logToFile(fmt.Sprintf("Response to LLM: %s", responseToLLM))
+					m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
 					// Send a new message with the result
 					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
 					ctx, cancel := context.WithCancel(context.Background())
@@ -402,29 +380,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			return m, nil
 		case "/log":
-			m.loggingEnabled = !m.loggingEnabled
-			var logMsg string
-			if m.loggingEnabled {
-				var err error
-				exePath, err := os.Executable()
-				if err != nil {
-					logMsg = fmt.Sprintf("Error getting executable path: %v", err)
-				} else {
-					logPath := filepath.Join(filepath.Dir(exePath), "logs", "log.txt")
-					m.logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-					if err != nil {
-						logMsg = fmt.Sprintf("Error opening log file: %v", err)
-					} else {
-						logMsg = "Logging enabled."
-					}
-				}
-			} else {
-				if m.logFile != nil {
-					m.logFile.Close()
-					m.logFile = nil
-				}
-				logMsg = "Logging disabled."
-			}
+			logMsg := m.logger.Toggle()
 			m.messages = append(m.messages, Message{Role: "assistant", Content: logMsg})
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
@@ -722,7 +678,7 @@ func main() {
 		systemPrompt = "You are a helpful assistant."
 	}
 	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt)
-	m.setupLogging()
+	m.logger.Setup()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
 	if _, err := p.Run(); err != nil {
