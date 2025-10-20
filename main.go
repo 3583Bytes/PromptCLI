@@ -211,45 +211,122 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sending = false
 			m.stats = msg.stats
 
-			// Command execution logic
+			finalMessage := msg.finalMessage // This is the full accumulated message
 			var toolName string
 			var input map[string]interface{}
+			var isToolCall bool = false
 
-			if len(msg.finalMessage.ToolCalls) > 0 {
-				// Prefer the new tool_calls format
-				call := msg.finalMessage.ToolCalls[0] // Assuming one call
+			// Prefer native tool_calls format
+			if len(finalMessage.ToolCalls) > 0 {
+				m.logger.Log("Found native tool_calls.")
+				isToolCall = true
+				call := finalMessage.ToolCalls[0] // Assuming one call
 				toolName = call.Function.Name
 				input = call.Function.Arguments
-			} else {
-				// Fallback for older format or non-tool-call messages
-				var llmResponse LLMResponse
-				if err := json.Unmarshal([]byte(m.messages[len(m.messages)-1].Content), &llmResponse); err == nil {
-					if llmResponse.Action.Tool != "" {
+			} else if finalMessage.Content != "" {
+				// Fallback for older action-in-content format
+				jsonStart := strings.Index(finalMessage.Content, "{")
+				jsonEnd := strings.LastIndex(finalMessage.Content, "}")
+
+				if jsonStart != -1 {
+					// Extract the JSON part of the string, which might be incomplete
+					var jsonStr string
+					if jsonEnd != -1 && jsonEnd > jsonStart {
+						jsonStr = finalMessage.Content[jsonStart : jsonEnd+1]
+					} else {
+						jsonStr = finalMessage.Content[jsonStart:]
+					}
+
+					var llmResponse LLMResponse
+					err := json.Unmarshal([]byte(jsonStr), &llmResponse)
+
+					// Attempt to fix missing closing brace
+					if err != nil && strings.Contains(err.Error(), "unexpected end of JSON input") {
+						m.logger.Log("JSON parsing failed, attempting to fix by adding a closing brace '}'.")
+						err = json.Unmarshal([]byte(jsonStr+"}"), &llmResponse)
+					}
+
+					if err == nil {
+						m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
+						isToolCall = true
 						toolName = llmResponse.Action.Tool
 						input = llmResponse.Action.Input
+					} else {
+						// Final fallback: Regex to extract the message if parsing fails completely.
+						m.logger.Log(fmt.Sprintf("JSON parsing failed, falling back to regex extraction. Error: %v", err))
+						re := regexp.MustCompile(`(?s)\"message\"\s*:\s*\"(.*)\"`) // Corrected regex
+						matches := re.FindStringSubmatch(finalMessage.Content)
+
+						if len(matches) > 1 {
+							// The captured group is JSON-escaped. We need to unescape it.
+							escapedMessage := matches[1]
+							message, unquoteErr := strconv.Unquote(`\"` + escapedMessage + `\"`)
+							if unquoteErr == nil {
+								m.logger.Log("Successfully extracted message with regex fallback.")
+								// We'll treat this as a "respond" action.
+								isToolCall = true
+								toolName = "respond"
+								input = make(map[string]interface{})
+								input["message"] = message
+							} else {
+								m.logger.Log(fmt.Sprintf("Regex found a message, but failed to unquote it: %v", unquoteErr))
+							}
+						}
 					}
 				}
 			}
 
-			if toolName != "" {
-				if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
-					m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
-					// Send a new message with the result
-					m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
-					ctx, cancel := context.WithCancel(context.Background())
-					m.cancel = cancel
-					m.sending = true
-					m.streaming = true
-					m.stream = make(chan interface{})
-					m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-					m.viewport.SetContent(m.renderMessages())
-					m.viewport.GotoBottom()
-					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+			if isToolCall {
+				if toolName == "respond" {
+					m.logger.Log("Handling 'respond' tool.")
+					var message string
+					if msgStr, ok := input["message"].(string); ok {
+						message = msgStr
+					} else if msgArr, ok := input["message"].([]interface{}); ok {
+						var parts []string
+						for _, item := range msgArr {
+							if part, ok := item.(string); ok {
+								parts = append(parts, part)
+							}
+						}
+						message = strings.Join(parts, "\n")
+					}
+					if message != "" {
+						m.logger.Log(fmt.Sprintf("Extracted message for UI: '%.60s...'", message))
+						m.messages[len(m.messages)-1].Content = message
+					}
+				} else {
+					// Format "Command Received" and execute
+					m.logger.Log(fmt.Sprintf("Handling '%s' tool.", toolName))
+					var details []string
+					for key, value := range input {
+						if key == "content" {
+							details = append(details, fmt.Sprintf("**%s**:\n```\n%v\n```", strings.Title(key), value))
+						} else {
+							details = append(details, fmt.Sprintf("**%s**: `%v`", strings.Title(key), value))
+						}
+					}
+					m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Received**: `%s`\n%s", toolName, strings.Join(details, "\n"))
+
+					if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
+						// ... start new stream ...
+						m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
+						m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
+						ctx, cancel := context.WithCancel(context.Background())
+						m.cancel = cancel
+						m.sending = true
+						m.streaming = true
+						m.stream = make(chan interface{})
+						m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+						m.viewport.SetContent(m.renderMessages())
+						m.viewport.GotoBottom()
+						return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+					}
 				}
 			}
+			// If it wasn't a tool call, the content is just plain text and is already accumulated correctly.
 
-			// After a stream is done, always re-render the messages
-			// to process the final response (e.g. for a `respond` tool call).
+			// Final render
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 		}
@@ -275,7 +352,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(taCmd, vpCmd)
 }
-
 func (m *model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focused != focusTextarea {
 		return m, nil
@@ -447,48 +523,10 @@ func (m *model) renderMessages() string {
 			md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
 			content.WriteString(errorStyle.Render(md))
 			continue
-		} else if msg.Role == "assistant" {
-			var llmResponse LLMResponse
-			err := json.Unmarshal([]byte(msg.Content), &llmResponse)
-			if err == nil {
-
-				if llmResponse.Action.Tool == "respond" {
-					var message string
-					if msgStr, ok := llmResponse.Action.Input["message"].(string); ok {
-						message = msgStr
-					} else if msgArr, ok := llmResponse.Action.Input["message"].([]interface{}); ok {
-						var parts []string
-						for _, item := range msgArr {
-							if part, ok := item.(string); ok {
-								parts = append(parts, part)
-							}
-						}
-						message = strings.Join(parts, "\n")
-					}
-
-					if message != "" {
-						renderedMsg = message
-					} else {
-						renderedMsg = msg.Content // Fallback to raw content
-					}
-				} else {
-					var details []string
-					for key, value := range llmResponse.Action.Input {
-						if key == "content" {
-							details = append(details, fmt.Sprintf("**%s**:\n```\n%v\n```", strings.Title(key), value))
-						} else {
-							details = append(details, fmt.Sprintf("**%s**: `%v`", strings.Title(key), value))
-						}
-					}
-					renderedMsg = fmt.Sprintf("**Command Received**: `%s`\n%s", llmResponse.Action.Tool, strings.Join(details, "\n"))
-				}
-			} else {
-				renderedMsg = msg.Content // Fallback to raw content
-			}
 		} else {
 			renderedMsg = msg.Content
 		}
-
+		//m.logger.Log(fmt.Sprintf("Response: %s Role: %s", msg.Content, msg.Role))
 		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, renderedMsg))
 		content.WriteString(md)
 	}
@@ -584,49 +622,58 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 			}
 			reqBody, err := json.Marshal(req)
 			if err != nil {
+				m.stream <- errorMsg{err}
 				return
 			}
 
 			httpReq, err := http.NewRequestWithContext(ctx, "POST", m.apiURL+"/api/chat", bytes.NewBuffer(reqBody))
 			if err != nil {
+				m.stream <- errorMsg{err}
 				return
 			}
 
 			resp, err := http.DefaultClient.Do(httpReq)
 			if err != nil {
+				m.stream <- errorMsg{err}
 				return
 			}
 			defer resp.Body.Close()
 
-			// Use a TeeReader to capture the raw response while it's being decoded.
-			var rawRespBuffer bytes.Buffer
-			teeReader := io.TeeReader(resp.Body, &rawRespBuffer)
-
 			startTime := time.Now()
-			var finalResponse ChatResponse
+			var finalResponse ChatResponse // For stats at the end
+			var accumulatedMessage Message // Accumulate the full message here
 
-			decoder := json.NewDecoder(teeReader)
+			decoder := json.NewDecoder(resp.Body)
 			for {
 				var chatResp ChatResponse
 				if err := decoder.Decode(&chatResp); err == io.EOF {
 					break
 				} else if err != nil {
-					m.logger.Log(fmt.Sprintf("Error decoding stream chunk: %v", err))
-					// Log whatever was captured in the buffer before the error
-					m.logger.Log(fmt.Sprintf("Raw LLM response (partial on error): %s", rawRespBuffer.String()))
+					m.stream <- errorMsg{fmt.Errorf("error decoding stream chunk: %v", err)}
 					break
 				}
 
-				m.wg.Add(1)
-				m.stream <- chatResp.Message.Content
-
-				if chatResp.Done {
-					finalResponse = chatResp
-					// Log the complete raw response from the buffer
-					m.logger.Log(fmt.Sprintf("Response: %s", chatResp.Message.Content))
-					break
+				// Send content chunk for live display
+				if chatResp.Message.Content != "" {
+					m.wg.Add(1)
+					m.stream <- chatResp.Message.Content
 				}
-			}
+
+				// Accumulate the complete message object
+				if accumulatedMessage.Role == "" {
+					accumulatedMessage.Role = chatResp.Message.Role
+				}
+				accumulatedMessage.Content += chatResp.Message.Content
+				if len(chatResp.Message.ToolCalls) > 0 {
+					accumulatedMessage.ToolCalls = append(accumulatedMessage.ToolCalls, chatResp.Message.ToolCalls...)
+				}
+
+				                if chatResp.Done {
+				                    m.logger.Log("Received 'Done: true' from Ollama API.")
+				                    m.logger.Log(fmt.Sprintf("Final accumulated message content before parsing: %s", accumulatedMessage.Content))
+				                    finalResponse = chatResp
+				                    break
+				                }			}
 
 			duration := time.Since(startTime)
 			tokensPerSecond := 0.0
@@ -634,7 +681,7 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
 			}
 			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
-			m.stream <- streamDoneMsg{stats: stats, finalMessage: finalResponse.Message}
+			m.stream <- streamDoneMsg{stats: stats, finalMessage: accumulatedMessage} // Send the *accumulated* message
 		}(ctx)
 		return nil
 	}
