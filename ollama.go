@@ -2,21 +2,20 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type streamChunkMsg string
-type streamDoneMsg struct{ stats string; finalMessage Message }
+type streamDoneMsg struct {
+	stats        string
+	finalMessage Message
+}
 type errorMsg struct{ err error }
 
 func waitForStreamCmd(stream chan interface{}) tea.Cmd {
@@ -26,69 +25,6 @@ func waitForStreamCmd(stream chan interface{}) tea.Cmd {
 			return nil
 		}
 		return msg
-	}
-}
-
-func startStreamCmd(ctx context.Context, apiURL, modelName string, messages []Message, stream chan interface{}, wg *sync.WaitGroup) tea.Cmd {
-	return func() tea.Msg {
-		go func(ctx context.Context) {
-			defer close(stream)
-
-			req := ChatRequest{
-				Model:    modelName,
-				Messages: messages,
-				Stream:   true,
-			}
-			reqBody, err := json.Marshal(req)
-			if err != nil {
-				stream <- errorMsg{err}
-				return
-			}
-
-			httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL+"/api/chat", bytes.NewBuffer(reqBody))
-			if err != nil {
-				stream <- errorMsg{err}
-				return
-			}
-
-			resp, err := http.DefaultClient.Do(httpReq)
-			if err != nil {
-				stream <- errorMsg{err}
-				return
-			}
-			defer resp.Body.Close()
-
-			startTime := time.Now()
-			var finalResponse ChatResponse
-
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				var chatResp ChatResponse
-				if err := decoder.Decode(&chatResp); err == io.EOF {
-					break
-				} else if err != nil {
-					stream <- errorMsg{err}
-					break
-				}
-
-				wg.Add(1)
-				stream <- streamChunkMsg(chatResp.Message.Content)
-
-				if chatResp.Done {
-					finalResponse = chatResp
-					break
-				}
-			}
-
-			duration := time.Since(startTime)
-			tokensPerSecond := 0.0
-			if duration.Seconds() > 0 {
-				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
-			}
-			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
-			stream <- streamDoneMsg{stats: stats}
-		}(ctx)
-		return nil
 	}
 }
 
