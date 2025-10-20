@@ -122,6 +122,8 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		fileNames = append(fileNames, file.Name())
 	}
 
+	//For some reason Role has to be "system" have to investiget this further why.
+
 	m := &model{
 		textarea:         ta,
 		viewport:         vp,
@@ -221,7 +223,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				// Fallback for older format or non-tool-call messages
 				var llmResponse LLMResponse
-				if err := json.Unmarshal([]byte(msg.finalMessage.Content), &llmResponse); err == nil {
+				if err := json.Unmarshal([]byte(m.messages[len(m.messages)-1].Content), &llmResponse); err == nil {
 					if llmResponse.Action.Tool != "" {
 						toolName = llmResponse.Action.Tool
 						input = llmResponse.Action.Input
@@ -412,6 +414,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, Message{Role: "user", Content: userInput})
 		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 		m.viewport.SetContent(m.renderMessages())
+
 		m.textarea.Reset()
 		m.viewport.GotoBottom()
 		return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
@@ -463,6 +466,7 @@ func (m *model) renderMessages() string {
 						}
 					}
 					renderedMsg = fmt.Sprintf("**Command Received**: `%s`\n%s", llmResponse.Action.Tool, strings.Join(details, "\n"))
+					m.logger.Log(fmt.Sprintf("Response: %s", msg.Content))
 				}
 			} else {
 				renderedMsg = msg.Content // Fallback to raw content
@@ -604,12 +608,11 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 
 				if chatResp.Done {
 					finalResponse = chatResp
+					// Log the complete raw response from the buffer
+					m.logger.Log(fmt.Sprintf("Response: %s", chatResp.Message.Content))
 					break
 				}
 			}
-
-			// Log the complete raw response from the buffer
-			//m.logger.Log(fmt.Sprintf("Raw LLM response: %s", rawRespBuffer.String()))
 
 			duration := time.Since(startTime)
 			tokensPerSecond := 0.0
