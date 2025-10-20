@@ -247,6 +247,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
 				}
 			}
+
+			// After a stream is done, always re-render the messages
+			// to process the final response (e.g. for a `respond` tool call).
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
 		}
 
 	case errorMsg:
@@ -435,6 +440,8 @@ func (m *model) renderMessages() string {
 		}
 		role := "## " + strings.Title(msg.Role)
 
+		//m.logger.Log(fmt.Sprintf("Response: %s Role: %s", msg.Content, msg.Role))
+
 		var renderedMsg string
 		if msg.IsError {
 			md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
@@ -444,15 +451,23 @@ func (m *model) renderMessages() string {
 			var llmResponse LLMResponse
 			err := json.Unmarshal([]byte(msg.Content), &llmResponse)
 			if err == nil {
+
 				if llmResponse.Action.Tool == "respond" {
-					if message, ok := llmResponse.Action.Input["message"].(string); ok {
-						var objmap map[string]interface{}
-						if err := json.Unmarshal([]byte(message), &objmap); err == nil {
-							prettyJSON, _ := json.MarshalIndent(objmap, "", "  ")
-							renderedMsg = "```json\n" + string(prettyJSON) + "\n```"
-						} else {
-							renderedMsg = message
+					var message string
+					if msgStr, ok := llmResponse.Action.Input["message"].(string); ok {
+						message = msgStr
+					} else if msgArr, ok := llmResponse.Action.Input["message"].([]interface{}); ok {
+						var parts []string
+						for _, item := range msgArr {
+							if part, ok := item.(string); ok {
+								parts = append(parts, part)
+							}
 						}
+						message = strings.Join(parts, "\n")
+					}
+
+					if message != "" {
+						renderedMsg = message
 					} else {
 						renderedMsg = msg.Content // Fallback to raw content
 					}
@@ -466,7 +481,6 @@ func (m *model) renderMessages() string {
 						}
 					}
 					renderedMsg = fmt.Sprintf("**Command Received**: `%s`\n%s", llmResponse.Action.Tool, strings.Join(details, "\n"))
-					m.logger.Log(fmt.Sprintf("Response: %s", msg.Content))
 				}
 			} else {
 				renderedMsg = msg.Content // Fallback to raw content
