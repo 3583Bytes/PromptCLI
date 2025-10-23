@@ -537,17 +537,15 @@ func (m *model) View() string {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
 
-	var footer string
-	if m.sending {
-		footer = m.spinner.View() + " Waiting for response..."
-	} else if m.fileSearchActive {
+	var leftFooter string
+	if m.fileSearchActive {
 		footerText := "File search: "
 		if m.fileSearchResult != "" {
 			footerText += m.fileSearchResult
 		} else {
 			footerText += "No matches found"
 		}
-		footer = footerStyle.Render(footerText)
+		leftFooter = footerStyle.Render(footerText)
 	} else {
 		stats := "Response time and token stats will appear here."
 		if m.stats != "" {
@@ -562,8 +560,25 @@ func (m *model) View() string {
 		}
 
 		footerText := fmt.Sprintf("Model: %s | %s | %s", m.modelName, contextInfo, stats)
-		footer = footerStyle.Render(footerText)
+		leftFooter = footerStyle.Render(footerText)
 	}
+
+	var rightFooter string
+	if m.sending {
+		rightFooter = m.spinner.View() + " Waiting for response..."
+	}
+
+    spacerWidth := m.viewport.Width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
+    if spacerWidth < 0 {
+        spacerWidth = 0
+    }
+    spacer := strings.Repeat(" ", spacerWidth)
+
+	footer := lipgloss.JoinHorizontal(lipgloss.Left,
+		leftFooter,
+		spacer,
+		rightFooter,
+	)
 
 	if m.focused == focusViewport {
 		m.viewport.Style.BorderForeground(lipgloss.Color("205")) // Orange

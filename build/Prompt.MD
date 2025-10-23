@@ -57,5 +57,3 @@ You may return at most one tool call per turn. The host will execute it and retu
 { "version":"1.0","thoughts":["get last commit"],"action":{"tool":"git","input":{"cmd":"log","args":["-n","1"]}} }
 
 If a user requests multiple steps, take them one at a time: pick the next best action now, wait for tool results, then continue.
-
-ONLY produce the JSON object defined above.
