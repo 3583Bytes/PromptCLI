@@ -1,3 +1,10 @@
+// jsonParser.go
+// This file defines the data structures and helper functions
+// used by the CLI to communicate with the Ollama API.  It
+// contains the JSON schemas for model listings, model
+// details, chat requests/responses, and a utility for
+// extracting JSON from noisy output.
+
 package main
 
 import (
@@ -7,22 +14,41 @@ import (
 )
 
 // --- API Data Structures ---
+// TagsResponse represents the response from the /tags endpoint.
+// It contains a list of Model objects.
+//
+// The rest of the structs mirror the JSON returned by the
+// /show/<model> endpoint and the chat API.
+
+// TagsResponse holds the list of available models.
 type TagsResponse struct {
 	Models []Model `json:"models"`
 }
+
+// Model represents a single model entry in the tags list.
 type Model struct {
 	Name string `json:"name"`
 }
+
+// ShowModelResponse contains detailed information about a model.
+// The Details field holds generic metadata and ModelInfo holds
+// architecture‑specific fields.
 type ShowModelResponse struct {
 	Details   Details   `json:"details"`
 	ModelInfo ModelInfo `json:"model_info"`
 }
+
+// Details describes the general model metadata.
 type Details struct {
 	Format            string `json:"format"`
 	Family            string `json:"family"`
 	ParameterSize     string `json:"parameter_size"`
 	QuantizationLevel string `json:"quantization_level"`
 }
+
+// ModelInfo contains architecture‑specific fields.  The
+// GenericContextLength field is not marshalled but is set
+// dynamically at runtime based on the architecture.
 type ModelInfo struct {
 	// Generic field that can capture context length regardless of model architecture
 	GenericContextLength interface{} `json:"-"` // This will be set dynamically based on architecture
@@ -35,27 +61,40 @@ type ModelInfo struct {
 	LlamaContextLength interface{} `json:"llama.context_length,omitempty"`
 	GemmaContextLength interface{} `json:"gemma.context_length,omitempty"`
 
-MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
+	MistralContextLength interface{} `json:"mistral.context_length,omitempty"`
 	GptossContextLength  interface{} `json:"gptoss.context_length,omitempty"`
 }
+
+// ChatRequest represents a request to the chat endpoint.
+// It contains the model, a sequence of messages, and a flag
+// indicating whether the response should be streamed.
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
 }
+
+// Message is an individual chat message.  It may contain tool
+// calls and an error flag used internally.
 type Message struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	IsError   bool       `json:"-"`
 }
+
+// ChatResponse is the response from the chat endpoint.
+// It contains the resulting message, a done flag, and
+// the number of evaluation tokens.
 type ChatResponse struct {
 	Message   Message `json:"message"`
 	Done      bool    `json:"done"`
 	EvalCount int     `json:"eval_count"`
 }
 
-// FlexibleStringSlice can unmarshal a JSON string or array of strings into a slice of strings.
+// FlexibleStringSlice can unmarshal a JSON string or array of strings
+// into a slice of strings.  This is useful for optional fields that
+// may appear as either a single string or a list.
 type FlexibleStringSlice []string
 
 func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
@@ -79,6 +118,7 @@ func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
 }
 
 // Action represents the action to be taken by the tool.
+// It is sent to the LLM to request execution.
 type Action struct {
 	Tool  string                 `json:"tool"`
 	Input map[string]interface{} `json:"input"`
@@ -96,6 +136,7 @@ type FunctionCall struct {
 }
 
 // LLMResponse represents the structured JSON response from the LLM.
+// It contains the action the LLM wants to perform and any tool calls.
 type LLMResponse struct {
 	Version   string              `json:"version"`
 	Thoughts  FlexibleStringSlice `json:"thoughts"`
@@ -103,6 +144,9 @@ type LLMResponse struct {
 	ToolCalls []ToolCall          `json:"tool_calls"`
 }
 
+// fixGitArgs normalises the "args" field in a git JSON payload so
+// that each argument is a separate string.  This is required by the
+// underlying command line interface.
 func fixGitArgs(jsonStr string) string {
 	// Case 1: "args": [-n 1]
 	re1 := regexp.MustCompile(`"args":\s*\[([^\]]*)\]`)
@@ -146,6 +190,10 @@ func fixGitArgs(jsonStr string) string {
 
 	return jsonStr
 }
+
+// extractJSON attempts to extract a valid JSON object from a string
+// that may contain noise or partial data.  It is used to parse
+// output from the chat endpoint.
 func extractJSON(s string) (string, error) {
 	s = fixGitArgs(s)
 	s = strings.TrimSpace(s)

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -215,53 +214,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				input = call.Function.Arguments
 			} else if finalMessage.Content != "" {
 				// Fallback for older action-in-content format
-				jsonStart := strings.Index(finalMessage.Content, "{")
-				jsonEnd := strings.LastIndex(finalMessage.Content, "}")
-
-				if jsonStart != -1 {
-					// Extract the JSON part of the string, which might be incomplete
-					var jsonStr string
-					if jsonEnd != -1 && jsonEnd > jsonStart {
-						jsonStr = finalMessage.Content[jsonStart : jsonEnd+1]
-					} else {
-						jsonStr = finalMessage.Content[jsonStart:]
-					}
-
+				jsonStr, err := extractJSON(finalMessage.Content)
+				if err != nil {
+					m.logger.Log(fmt.Sprintf("Could not extract JSON: %v", err))
+				} else {
 					var llmResponse LLMResponse
-					err := json.Unmarshal([]byte(jsonStr), &llmResponse)
-
-					// Attempt to fix missing closing brace
-				if err != nil && strings.Contains(err.Error(), "unexpected end of JSON input") {
-					m.logger.Log("JSON parsing failed, attempting to fix by adding a closing brace '}'.")
-					err = json.Unmarshal([]byte(jsonStr+"}"), &llmResponse)
-					}
-
-					if err == nil {
+					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
 						m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
 						isToolCall = true
 						toolName = llmResponse.Action.Tool
 						input = llmResponse.Action.Input
 					} else {
-						// Final fallback: Regex to extract the message if parsing fails completely.
-						m.logger.Log(fmt.Sprintf("JSON parsing failed, falling back to regex extraction. Error: %v", err))
-						re := regexp.MustCompile(`(?s)\"message\"\s*:\s*\"(.*)\"`) // Corrected regex
-						matches := re.FindStringSubmatch(finalMessage.Content)
-
-						if len(matches) > 1 {
-							// The captured group is JSON-escaped. We need to unescape it.
-							escapedMessage := matches[1]
-							message, unquoteErr := strconv.Unquote(`\"` + escapedMessage + `\"`)
-							if unquoteErr == nil {
-								m.logger.Log("Successfully extracted message with regex fallback.")
-								// We'll treat this as a "respond" action.
-								isToolCall = true
-								toolName = "respond"
-								input = make(map[string]interface{})
-								input["message"] = message
-							} else {
-								m.logger.Log(fmt.Sprintf("Regex found a message, but failed to unquote it: %v", unquoteErr))
-							}
-						}
+						m.logger.Log(fmt.Sprintf("Failed to unmarshal JSON from extractJSON: %v", err))
 					}
 				}
 			}
