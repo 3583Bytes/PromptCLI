@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -102,7 +103,51 @@ type LLMResponse struct {
 	ToolCalls []ToolCall          `json:"tool_calls"`
 }
 
+func fixGitArgs(jsonStr string) string {
+	// Case 1: "args": [-n 1]
+	re1 := regexp.MustCompile(`"args":\s*\[([^\]]*)\]`)
+	jsonStr = re1.ReplaceAllStringFunc(jsonStr, func(match string) string {
+		contentMatch := re1.FindStringSubmatch(match)
+		if len(contentMatch) < 2 {
+			return match
+		}
+		content := contentMatch[1]
+
+		if strings.Contains(content, `"`) || strings.TrimSpace(content) == "" {
+			return match
+		}
+
+		parts := strings.Fields(content)
+		var newParts []string
+		for _, p := range parts {
+			escapedPart := strings.ReplaceAll(p, `"`, `\\"`)
+			newParts = append(newParts, `"`+escapedPart+`"`)
+		}
+		return `"args": [` + strings.Join(newParts, ", ") + `]`
+	})
+
+	// Case 2: "args": "-n 1"
+	re2 := regexp.MustCompile(`"args":\s*"([^"]*)"`) // Corrected regex for case 2
+	jsonStr = re2.ReplaceAllStringFunc(jsonStr, func(match string) string {
+		contentMatch := re2.FindStringSubmatch(match)
+		if len(contentMatch) < 2 {
+			return match
+		}
+		content := contentMatch[1]
+
+		parts := strings.Fields(content)
+		var newParts []string
+		for _, p := range parts {
+			escapedPart := strings.ReplaceAll(p, `"`, `\\"`)
+			newParts = append(newParts, `"`+escapedPart+`"`)
+		}
+		return `"args": [` + strings.Join(newParts, ", ") + `]`
+	})
+
+	return jsonStr
+}
 func extractJSON(s string) (string, error) {
+	s = fixGitArgs(s)
 	s = strings.TrimSpace(s)
 
 	startIndex := strings.Index(s, "{")
@@ -128,7 +173,7 @@ func extractJSON(s string) (string, error) {
 			switch r {
 			case '{', '[':
 				stack = append(stack, r)
-			case '}' :
+			case '}':
 				if len(stack) > 0 && stack[len(stack)-1] == '{' {
 					stack = stack[:len(stack)-1]
 				}

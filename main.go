@@ -40,7 +40,12 @@ func main() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
-	baseURL := fmt.Sprintf("%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
+	var baseURL string
+	if strings.HasPrefix(configs.OllamaServerURL, "http") {
+		baseURL = fmt.Sprintf("%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
+	} else {
+		baseURL = fmt.Sprintf("http://%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
+	}
 
 	models, err := getModels(baseURL)
 	if err != nil {
