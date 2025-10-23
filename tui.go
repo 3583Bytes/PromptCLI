@@ -59,6 +59,7 @@ type model struct {
 	commandHandler   *CommandHandler
 	history          []string
 	historyCursor    int
+	ctrlCpressed     bool
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool) *model {
@@ -163,22 +164,50 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		return m, vpCmd
 	case tea.KeyMsg:
+        if m.ctrlCpressed {
+            switch msg.Type {
+            case tea.KeyCtrlC:
+                return m, tea.Quit
+            case tea.KeyEsc:
+                m.ctrlCpressed = false
+                return m, nil
+            }
+        }
+
 		switch msg.Type {
 		case tea.KeyCtrlC:
-			return m, tea.Quit
+            m.ctrlCpressed = true
+            if m.sending {
+                if m.cancel != nil {
+                    m.cancel()
+                }
+                m.streaming = false
+                m.sending = false
+                if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
+                    m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
+                }
+                m.viewport.SetContent(m.renderMessages())
+                m.viewport.GotoBottom()
+            }
+			return m, nil
 		case tea.KeyEnter:
+            m.ctrlCpressed = false
 			if m.focused == focusTextarea {
 				return m.handleEnter()
 			}
 		case tea.KeyUp, tea.KeyDown:
+            m.ctrlCpressed = false
 			return m.handleArrowKeys(msg)
 		case tea.KeyTab:
+            m.ctrlCpressed = false
 			return m.handleTabKey()
 		case tea.KeyEsc:
+            m.ctrlCpressed = false
 			return m.handleEscKey()
 		}
 
 		if m.focused == focusTextarea {
+            m.ctrlCpressed = false
 			return m.handleTextInput(msg)
 		} else {
 			m.viewport, vpCmd = m.viewport.Update(msg)
@@ -286,6 +315,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case errorMsg:
+		// If the error is due to context cancellation, we can ignore it,
+		// as the cancellation is handled by the Ctrl-C logic.
+		if strings.Contains(msg.err.Error(), "context canceled") {
+			return m, nil
+		}
 		m.sending = false
 		m.error = msg.err
 
@@ -501,6 +535,14 @@ func (m *model) View() string {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
 
+    if m.ctrlCpressed {
+        return lipgloss.JoinVertical(lipgloss.Left,
+            m.viewport.View(),
+            m.textarea.View(),
+            footerStyle.Render("Press Ctrl-C again to exit the application. Press Esc to cancel."),
+        )
+    }
+
 	var leftFooter string
 	if m.fileSearchActive {
 		footerText := "File search: "
@@ -570,6 +612,8 @@ func (m *model) waitForStreamCmd() tea.Cmd {
 			return streamChunkMsg(msg)
 		case streamDoneMsg:
 			return msg
+		case errorMsg:
+			return msg // Pass the error message through
 		default:
 			return errorMsg{fmt.Errorf("unknown message type: %T", msg)}
 		}
