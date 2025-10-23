@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // CommandHandler is responsible for executing commands received from the LLM.
@@ -131,29 +132,25 @@ func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
 		path = "."
 	}
 
-	files, err := os.ReadDir(path)
-	if err != nil {
-		return fmt.Sprintf("Error reading directory '%s': %v", path, err)
-	}
+	glob, _ := input["glob"].(string)
 
 	var fileNames []string
-	for _, file := range files {
-		fileNames = append(fileNames, file.Name())
-	}
-
-	glob, _ := input["glob"].(string)
 	if glob != "" {
-		var matchedFiles []string
-		for _, fileName := range fileNames {
-			matched, err := filepath.Match(glob, fileName)
-			if err != nil {
-				return fmt.Sprintf("Error matching glob pattern: %v", err)
-			}
-			if matched {
-				matchedFiles = append(matchedFiles, fileName)
-			}
+		fsys := os.DirFS(path)
+		var err error
+		fileNames, err = doublestar.Glob(fsys, glob)
+		if err != nil {
+			return fmt.Sprintf("Error matching glob pattern '%s': %v", glob, err)
 		}
-		fileNames = matchedFiles
+	} else {
+        // Original non-recursive logic if no glob is provided.
+		files, err := os.ReadDir(path)
+		if err != nil {
+			return fmt.Sprintf("Error reading directory '%s': %v", path, err)
+		}
+		for _, file := range files {
+			fileNames = append(fileNames, file.Name())
+		}
 	}
 
 	result := fmt.Sprintf("Files in '%s':\n%s", path, strings.Join(fileNames, "\n"))

@@ -13,7 +13,7 @@ You are Developer Agent, a careful, helpful tool-using assistant that controls a
 You may return at most one tool call per turn. The host will execute it and return results in the next message.
 
 - list_files
-  - purpose: list files in a directory (non-recursive)
+  - purpose: list files in a directory, with support for recursive glob patterns (e.g., "**/*")
   - input: {"path": "string | null", "glob": "string | null"}
 - read_file
   - input: {"path": "string", "max_bytes": "integer | null"}
