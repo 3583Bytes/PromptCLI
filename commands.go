@@ -32,12 +32,13 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 	case "list_files":
 		return ch.handleListFiles(input)
 	case "delete_file":
-		// To be implemented
-		return "delete_file command not implemented yet."
+		return ch.handleDeleteFile(input)
 	case "append_file":
 		return ch.handleAppendFile(input)
 	case "git":
 		return ch.handleGit(input)
+	case "web_search":
+		return ch.handleWebSearch(input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
 		if msg, ok := input["message"].(string); ok {
@@ -47,6 +48,21 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 	default:
 		return fmt.Sprintf("Unknown command: %s", toolName)
 	}
+}
+
+func (ch *CommandHandler) handleWebSearch(input map[string]interface{}) string {
+	query, ok := input["q"].(string)
+	if !ok {
+		return "Error: 'q' not specified or not a string for web_search."
+	}
+	ch.model.logger.Log(fmt.Sprintf("handleWebSearch query: %s", query))
+
+	results, err := performWebSearch(query, ch.model.logger)
+	if err != nil {
+		return fmt.Sprintf("Error performing web search: %v", err)
+	}
+
+	return results
 }
 
 func (ch *CommandHandler) handleReadFile(input map[string]interface{}) string {
@@ -123,6 +139,21 @@ func (ch *CommandHandler) handleAppendFile(input map[string]interface{}) string 
 
 	ch.model.updateFileList()
 	return fmt.Sprintf("Content appended to file '%s' successfully.", path)
+}
+
+func (ch *CommandHandler) handleDeleteFile(input map[string]interface{}) string {
+	path, ok := input["path"].(string)
+	if !ok {
+		return "Error: 'path' not specified or not a string for delete_file."
+	}
+
+	err := os.Remove(path)
+	if err != nil {
+		return fmt.Sprintf("Error deleting file '%s': %v", path, err)
+	}
+
+	ch.model.updateFileList()
+	return fmt.Sprintf("File '%s' deleted successfully.", path)
 }
 
 func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
