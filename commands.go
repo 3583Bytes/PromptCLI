@@ -25,6 +25,9 @@ func NewCommandHandler(m *model) *CommandHandler {
 
 // ExecuteCommand processes the LLM response and executes the specified command.
 func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]interface{}) string {
+	if toolName == "" {
+		return "" // Do nothing if the tool name is empty
+	}
 	switch toolName {
 	case "write_file":
 		return ch.handleWriteFile(input)

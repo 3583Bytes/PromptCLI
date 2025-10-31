@@ -46,6 +46,12 @@ func main() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
+	logger := NewLogger()
+	if configs.LogEnabled {
+		logger.Toggle()
+	}
+	logger.Setup()
+
 	// Construct the base URL for the Ollama server, adding the HTTP scheme if missing.
 	var baseURL string
 	if strings.HasPrefix(configs.OllamaServerURL, "http") {
@@ -54,8 +60,10 @@ func main() {
 		baseURL = fmt.Sprintf("http://%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
 	}
 
+	logger.Log(fmt.Sprintf("Connecting to Ollama at: %s", baseURL))
+
 	// Retrieve the list of available models from the Ollama server.
-	models, err := getModels(baseURL)
+	models, err := getModels(baseURL, logger)
 	if err != nil {
 		log.Fatalf("Error getting models: %v", err)
 	}
@@ -105,7 +113,7 @@ func main() {
 	}
 
 	// Initialize the Bubble Tea model with the gathered configuration.
-	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt, configs.LogEnabled)
+	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt, configs.LogEnabled, logger)
 
 	// Create a new Bubble Tea program with alternate screen and mouse support.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())

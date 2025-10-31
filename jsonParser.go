@@ -77,10 +77,11 @@ type ChatRequest struct {
 // Message is an individual chat message.  It may contain tool
 // calls and an error flag used internally.
 type Message struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	IsError   bool       `json:"-"`
+	Role           string     `json:"role"`
+	Content        string     `json:"content"`
+	DisplayContent string     `json:"-"`
+	ToolCalls      []ToolCall `json:"tool_calls,omitempty"`
+	IsError        bool       `json:"-"`
 }
 
 // ChatResponse is the response from the chat endpoint.

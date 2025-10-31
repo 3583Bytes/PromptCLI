@@ -63,7 +63,7 @@ type model struct {
 	ctrlCpressed     bool
 }
 
-func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool) *model {
+func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *Logger) *model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -132,15 +132,10 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		files:            fileNames,
 		spinner:          s,
 		wg:               &sync.WaitGroup{},
-		logger:           NewLogger(),
+		logger:           logger,
 		history:          []string{},
 		historyCursor:    -1,
 	}
-
-	if logEnabled {
-		m.logger.Toggle()
-	}
-	m.logger.Setup() // Moved Setup call here
 
 	m.commandHandler = NewCommandHandler(m)
 	return m
@@ -281,21 +276,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else {
 					// Format "Command Received" and execute
-					m.logger.Log(fmt.Sprintf("Handling '%s' tool.", toolName))
-					var details []string
-					for key, value := range input {
-						if key == "content" {
-							details = append(details, fmt.Sprintf("**%s**:\n```\n%v\n```", strings.Title(key), value))
-						} else {
-							details = append(details, fmt.Sprintf("**%s**: `%v`", strings.Title(key), value))
-						}
-					}
-					m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Received**: `%s`\n%s", toolName, strings.Join(details, "\n"))
+					m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Executed**: `%s`", toolName)
 
 					if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
 						// ... start new stream ...
 						m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
-						m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM})
+						m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
 						ctx, cancel := context.WithCancel(context.Background())
 						m.cancel = cancel
 						m.sending = true
@@ -529,7 +515,11 @@ func (m *model) renderMessages() string {
 			content.WriteString(errorStyle.Render(md))
 			continue
 		} else {
-			renderedMsg = msg.Content
+			if msg.DisplayContent != "" {
+				renderedMsg = msg.DisplayContent
+			} else {
+				renderedMsg = msg.Content
+			}
 		}
 		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, renderedMsg))
 		content.WriteString(md)
@@ -655,18 +645,24 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 				return
 			}
 
+			m.logger.Log(fmt.Sprintf("Sending request to Ollama: %s", string(reqBody)))
+
 			httpReq, err := http.NewRequestWithContext(ctx, "POST", m.apiURL+"/api/chat", bytes.NewBuffer(reqBody))
 			if err != nil {
+				m.logger.Log(fmt.Sprintf("Error creating request: %v", err))
 				m.stream <- errorMsg{err}
 				return
 			}
 
 			resp, err := http.DefaultClient.Do(httpReq)
 			if err != nil {
+				m.logger.Log(fmt.Sprintf("Error sending request: %v", err))
 				m.stream <- errorMsg{err}
 				return
 			}
 			defer resp.Body.Close()
+
+			m.logger.Log(fmt.Sprintf("Ollama response status: %s", resp.Status))
 
 			startTime := time.Now()
 			var finalResponse ChatResponse // For stats at the end
