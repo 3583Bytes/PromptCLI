@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -160,4 +161,36 @@ func getText(n *html.Node) string {
 		text.WriteString(getText(c))
 	}
 	return strings.TrimSpace(text.String())
+}
+
+func extractTextFromHTML(r io.Reader) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	var text strings.Builder
+	var crawler func(*html.Node)
+	crawler = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			text.WriteString(node.Data)
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			crawler(c)
+		}
+	}
+	crawler(doc)
+
+	// Clean up the text a bit
+	rawText := text.String()
+	lines := strings.Split(rawText, "\n")
+	var cleanedLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			cleanedLines = append(cleanedLines, trimmed)
+		}
+	}
+
+	return strings.Join(cleanedLines, "\n"), nil
 }

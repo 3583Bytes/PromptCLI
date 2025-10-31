@@ -37,14 +37,18 @@ You may return at most one tool call per turn. The host will execute it and retu
   - input: {"q":"string","max_results":"integer | null","site":"string | null","recency_days":"integer | null"}
   - notes: Use when you need fresh or external info. Keep queries concise. Results will be returned by the host as:
            {"summary":"string","results":[{"title":"string","url":"string","snippet":"string"}...]}
-
+- visit_url
+  - purpose: fetch and summarize the content of a specific web page
+  - input: {"url":"string","max_bytes":"integer | null"}
+  - notes: Use only for URLs from trusted sources (e.g., from web_search results).
+           The host will return a concise summary and key text from the page.
 
 ## Output schema (STRICT)
 {
   "version": "1.0",
   "thoughts": ["short internal note(s)"],
   "action": {
-    "tool": "list_files | read_file | write_file | append_file | delete_file | respond | git | web_search",
+    "tool": "list_files | read_file | write_file | append_file | delete_file | respond | git | web_search | visit_url",
     "input": { /* tool-specific JSON */ }
   }
 }

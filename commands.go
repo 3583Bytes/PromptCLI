@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -39,6 +40,8 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 		return ch.handleGit(input)
 	case "web_search":
 		return ch.handleWebSearch(input)
+	case "visit_url":
+		return ch.handleVisitURL(input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
 		if msg, ok := input["message"].(string); ok {
@@ -48,6 +51,44 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 	default:
 		return fmt.Sprintf("Unknown command: %s", toolName)
 	}
+}
+
+func (ch *CommandHandler) handleVisitURL(input map[string]interface{}) string {
+	url, ok := input["url"].(string)
+	if !ok {
+		return "Error: 'url' not specified or not a string for visit_url."
+	}
+	ch.model.logger.Log(fmt.Sprintf("handleVisitURL url: %s", url))
+
+	maxBytes, _ := input["max_bytes"].(float64)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Sprintf("Error creating request for url %s: %v", url, err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Sprintf("Error fetching url %s: %v", url, err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		return fmt.Sprintf("Request to %s failed with status code: %d", url, res.StatusCode)
+	}
+
+	text, err := extractTextFromHTML(res.Body)
+	if err != nil {
+		return fmt.Sprintf("Error extracting text from %s: %v", url, err)
+	}
+
+	if maxBytes > 0 && len(text) > int(maxBytes) {
+		text = text[:int(maxBytes)]
+	}
+
+	return text
 }
 
 func (ch *CommandHandler) handleWebSearch(input map[string]interface{}) string {
