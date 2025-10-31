@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -164,50 +165,50 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		return m, vpCmd
 	case tea.KeyMsg:
-        if m.ctrlCpressed {
-            switch msg.Type {
-            case tea.KeyCtrlC:
-                return m, tea.Quit
-            case tea.KeyEsc:
-                m.ctrlCpressed = false
-                return m, nil
-            }
-        }
+		if m.ctrlCpressed {
+			switch msg.Type {
+			case tea.KeyCtrlC:
+				return m, tea.Quit
+			case tea.KeyEsc:
+				m.ctrlCpressed = false
+				return m, nil
+			}
+		}
 
 		switch msg.Type {
 		case tea.KeyCtrlC:
-            m.ctrlCpressed = true
-            if m.sending {
-                if m.cancel != nil {
-                    m.cancel()
-                }
-                m.streaming = false
-                m.sending = false
-                if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
-                    m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
-                }
-                m.viewport.SetContent(m.renderMessages())
-                m.viewport.GotoBottom()
-            }
+			m.ctrlCpressed = true
+			if m.sending {
+				if m.cancel != nil {
+					m.cancel()
+				}
+				m.streaming = false
+				m.sending = false
+				if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
+					m.messages[len(m.messages)-1].Content += "\n\n--- Canceled ---"
+				}
+				m.viewport.SetContent(m.renderMessages())
+				m.viewport.GotoBottom()
+			}
 			return m, nil
 		case tea.KeyEnter:
-            m.ctrlCpressed = false
+			m.ctrlCpressed = false
 			if m.focused == focusTextarea {
 				return m.handleEnter()
 			}
 		case tea.KeyUp, tea.KeyDown:
-            m.ctrlCpressed = false
+			m.ctrlCpressed = false
 			return m.handleArrowKeys(msg)
 		case tea.KeyTab:
-            m.ctrlCpressed = false
+			m.ctrlCpressed = false
 			return m.handleTabKey()
 		case tea.KeyEsc:
-            m.ctrlCpressed = false
+			m.ctrlCpressed = false
 			return m.handleEscKey()
 		}
 
 		if m.focused == focusTextarea {
-            m.ctrlCpressed = false
+			m.ctrlCpressed = false
 			return m.handleTextInput(msg)
 		} else {
 			m.viewport, vpCmd = m.viewport.Update(msg)
@@ -443,7 +444,25 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		case "/bye":
 			return m, tea.Quit
 		case "/help":
-			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file"})
+			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application /help - Show this help message /stop - Stop the current response /log - Toggle logging to a file /copy - Copy the last response to the clipboard"})
+			m.viewport.SetContent(m.renderMessages())
+			m.textarea.Reset()
+			m.viewport.GotoBottom()
+			return m, nil
+		case "/copy":
+			var lastResponse string
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].Role == "assistant" {
+					lastResponse = m.messages[i].Content
+					break
+				}
+			}
+			if lastResponse != "" {
+				clipboard.WriteAll(lastResponse)
+				m.messages = append(m.messages, Message{Role: "assistant", Content: "Copied last response to clipboard."})
+			} else {
+				m.messages = append(m.messages, Message{Role: "assistant", Content: "No response to copy."})
+			}
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
@@ -535,13 +554,13 @@ func (m *model) View() string {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
 	}
 
-    if m.ctrlCpressed {
-        return lipgloss.JoinVertical(lipgloss.Left,
-            m.viewport.View(),
-            m.textarea.View(),
-            footerStyle.Render("Press Ctrl-C again to exit the application. Press Esc to cancel."),
-        )
-    }
+	if m.ctrlCpressed {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.textarea.View(),
+			footerStyle.Render("Press Ctrl-C again to exit the application. Press Esc to cancel."),
+		)
+	}
 
 	var leftFooter string
 	if m.fileSearchActive {
@@ -574,11 +593,11 @@ func (m *model) View() string {
 		rightFooter = m.spinner.View() + " Waiting for response..."
 	}
 
-    spacerWidth := m.viewport.Width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
-    if spacerWidth < 0 {
-        spacerWidth = 0
-    }
-    spacer := strings.Repeat(" ", spacerWidth)
+	spacerWidth := m.viewport.Width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
+	if spacerWidth < 0 {
+		spacerWidth = 0
+	}
+	spacer := strings.Repeat(" ", spacerWidth)
 
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,
 		leftFooter,
@@ -678,12 +697,13 @@ func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
 					accumulatedMessage.ToolCalls = append(accumulatedMessage.ToolCalls, chatResp.Message.ToolCalls...)
 				}
 
-				                if chatResp.Done {
-				                    m.logger.Log("Received 'Done: true' from Ollama API.")
-				                    m.logger.Log(fmt.Sprintf("Final accumulated message content before parsing: %s", accumulatedMessage.Content))
-				                    finalResponse = chatResp
-				                    break
-				                } 			}
+				if chatResp.Done {
+					m.logger.Log("Received 'Done: true' from Ollama API.")
+					m.logger.Log(fmt.Sprintf("Final accumulated message content before parsing: %s", accumulatedMessage.Content))
+					finalResponse = chatResp
+					break
+				}
+			}
 
 			duration := time.Since(startTime)
 			tokensPerSecond := 0.0
