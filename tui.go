@@ -245,10 +245,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					var llmResponse LLMResponse
 					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
-						m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
-						isToolCall = true
-						toolName = llmResponse.Action.Tool
-						input = llmResponse.Action.Input
+						if llmResponse.Action.Tool != "" {
+							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
+							isToolCall = true
+							toolName = llmResponse.Action.Tool
+							input = llmResponse.Action.Input
+						} else {
+							m.logger.Log("Parsed JSON, but tool name is empty. Not a tool call.")
+						}
 					} else {
 						m.logger.Log(fmt.Sprintf("Failed to unmarshal JSON from extractJSON: %v", err))
 					}
