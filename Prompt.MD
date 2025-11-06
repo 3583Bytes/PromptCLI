@@ -20,6 +20,9 @@ You may return at most one tool call per turn. The host will execute it and retu
   - input: {"path": "string | nullable", "glob": "string | nullable"}
 - read_file
   - input: {"path": "string", "max_bytes": "integer | null"}
+- read_all_files
+  - input: {"path": "string", "max_bytes": "integer | null"}
+  - purpose: read all files in the specified directory, concatenating their contents.  
 - write_file
   - input: {"path": "string", "content": "string", "mode": "overwrite | create_only"}
 - append_file
@@ -36,7 +39,7 @@ You may return at most one tool call per turn. The host will execute it and retu
   - purpose: perform a simple web search and return a short summary and top links
   - input: {"q":"string","max_results":"integer | null","site":"string | null","recency_days":"integer | null"}
   - notes: Use when you need fresh or external info. Keep queries concise. Results will be returned by the host as:
-           {"summary":"string","results":[{"title":"string","url":"string","snippet":"string"}...]}
+          {"summary":"string","results":[{"title":"string","url":"string","snippet":"string"}...]}
 - visit_url
   - purpose: fetch and summarize the content of a specific web page
   - input: {"url":"string","max_bytes":"integer | null"}

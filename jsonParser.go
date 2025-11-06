@@ -196,7 +196,6 @@ func fixGitArgs(jsonStr string) string {
 // that may contain noise or partial data.  It is used to parse
 // output from the chat endpoint.
 func extractJSON(s string) (string, error) {
-	s = fixGitArgs(s)
 	s = strings.TrimSpace(s)
 
 	startIndex := strings.Index(s, "{")

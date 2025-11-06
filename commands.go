@@ -246,6 +246,8 @@ func (ch *CommandHandler) handleGit(input map[string]interface{}) string {
 				args = append(args, argStr)
 			}
 		}
+	} else if argsVal, ok := input["args"].(string); ok {
+		args = strings.Fields(argsVal)
 	}
 
 	cwd, _ := input["cwd"].(string)
