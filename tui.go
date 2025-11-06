@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"regexp"
 	"strings"
@@ -23,6 +24,15 @@ import (
 
 var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
 var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))    // Red
+var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("12")) // Light Blue
+
+var devJokes = []string{
+	"Why do programmers prefer dark mode? Because light attracts bugs.",
+	"Why did the programmer quit his job? Because he didn't get arrays.",
+	"What's the object-oriented way to become wealthy? Inheritance.",
+	"Why do Java developers wear glasses? Because they don't C#.",
+	"A programmer puts two glasses on his bedside table. One with water if he gets thirsty, and one empty in case he doesn't.",
+}
 
 type focusable int
 
@@ -58,6 +68,7 @@ type model struct {
 	history          []string
 	historyCursor    int
 	ctrlCpressed     bool
+	currentJoke      string
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *Logger) *model {
@@ -209,6 +220,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamChunkMsg:
 		if m.streaming {
+			// When the first chunk arrives, clear the joke.
+			if m.currentJoke != "" {
+				m.currentJoke = ""
+			}
 			m.messages[len(m.messages)-1].Content += string(msg)
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
@@ -242,9 +257,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.logger.Log(fmt.Sprintf("Could not extract JSON: %v", err))
 				} else {
 					var llmResponse LLMResponse
-					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
-						if llmResponse.Action.Tool != "" {
-							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
+										if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
+												m.logger.Log(fmt.Sprintf("Unmarshaled LLMResponse: %+v", llmResponse))
+												if llmResponse.Action.Tool != "" {							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
 							isToolCall = true
 							toolName = llmResponse.Action.Tool
 							input = llmResponse.Action.Input
@@ -487,6 +502,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		m.sending = true
 		m.streaming = true
 		m.stream = make(chan interface{})
+		m.currentJoke = devJokes[rand.Intn(len(devJokes))]
 		m.messages = append(m.messages, Message{Role: "user", Content: userInput})
 		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 		m.viewport.SetContent(m.renderMessages())
@@ -505,7 +521,7 @@ func (m *model) renderMessages() string {
 	)
 
 	var content strings.Builder
-	for _, msg := range m.messages {
+	for i, msg := range m.messages {
 		if msg.Role == "system" {
 			continue
 		}
@@ -523,6 +539,15 @@ func (m *model) renderMessages() string {
 				renderedMsg = msg.Content
 			}
 		}
+
+		// If this is the last message, it's an assistant message, it's empty,
+		// and we are waiting for a response, render the joke.
+		if i == len(m.messages)-1 && msg.Role == "assistant" && msg.Content == "" && m.sending && m.currentJoke != "" {
+			md, _ := r.Render(fmt.Sprintf("%s\n\nThinking... %s\n\n---", role, m.currentJoke))
+			content.WriteString(jokeStyle.Render(md))
+			continue
+		}
+
 		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, renderedMsg))
 		content.WriteString(md)
 	}
