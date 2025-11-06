@@ -1,18 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -58,6 +54,7 @@ type model struct {
 	wg               *sync.WaitGroup
 	logger           *Logger
 	commandHandler   *CommandHandler
+	ollamaClient     *OllamaClient
 	history          []string
 	historyCursor    int
 	ctrlCpressed     bool
@@ -133,6 +130,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		spinner:          s,
 		wg:               &sync.WaitGroup{},
 		logger:           logger,
+		ollamaClient:     NewOllamaClient(apiURL, logger),
 		history:          []string{},
 		historyCursor:    -1,
 	}
@@ -215,7 +213,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 			m.wg.Done()
-			return m, m.waitForStreamCmd()
+			return m, waitForStreamCmd(m.stream)
 		}
 
 	case streamDoneMsg:
@@ -294,7 +292,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 						m.viewport.SetContent(m.renderMessages())
 						m.viewport.GotoBottom()
-						return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+						return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
 					}
 				}
 			}
@@ -495,7 +493,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 
 		m.textarea.Reset()
 		m.viewport.GotoBottom()
-		return m, tea.Batch(m.startStreamCmd(ctx), m.waitForStreamCmd(), m.spinner.Tick)
+		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
 	}
 	return m, nil
 }
@@ -612,107 +610,4 @@ func (m *model) View() string {
 	)
 }
 
-// --- API Call (As a tea.Cmd) ---
 
-func (m *model) waitForStreamCmd() tea.Cmd {
-	return func() tea.Msg {
-		msg, ok := <-m.stream
-		if !ok {
-			return nil
-		}
-		switch msg := msg.(type) {
-		case string:
-			return streamChunkMsg(msg)
-		case streamDoneMsg:
-			return msg
-		case errorMsg:
-			return msg // Pass the error message through
-		default:
-			return errorMsg{fmt.Errorf("unknown message type: %T", msg)}
-		}
-	}
-}
-
-func (m *model) startStreamCmd(ctx context.Context) tea.Cmd {
-	return func() tea.Msg {
-		go func(ctx context.Context) {
-			defer close(m.stream)
-
-			req := ChatRequest{
-				Model:    m.modelName,
-				Messages: m.messages,
-				Stream:   true,
-			}
-			reqBody, err := json.Marshal(req)
-			if err != nil {
-				m.stream <- errorMsg{err}
-				return
-			}
-
-			m.logger.Log(fmt.Sprintf("Sending request to Ollama: %s", string(reqBody)))
-
-			httpReq, err := http.NewRequestWithContext(ctx, "POST", m.apiURL+"/api/chat", bytes.NewBuffer(reqBody))
-			if err != nil {
-				m.logger.Log(fmt.Sprintf("Error creating request: %v", err))
-				m.stream <- errorMsg{err}
-				return
-			}
-
-			resp, err := http.DefaultClient.Do(httpReq)
-			if err != nil {
-				m.logger.Log(fmt.Sprintf("Error sending request: %v", err))
-				m.stream <- errorMsg{err}
-				return
-			}
-			defer resp.Body.Close()
-
-			m.logger.Log(fmt.Sprintf("Ollama response status: %s", resp.Status))
-
-			startTime := time.Now()
-			var finalResponse ChatResponse // For stats at the end
-			var accumulatedMessage Message // Accumulate the full message here
-
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				var chatResp ChatResponse
-				if err := decoder.Decode(&chatResp); err == io.EOF {
-					break
-				} else if err != nil {
-					m.stream <- errorMsg{fmt.Errorf("error decoding stream chunk: %v", err)}
-					break
-				}
-
-				// Send content chunk for live display
-				if chatResp.Message.Content != "" {
-					m.wg.Add(1)
-					m.stream <- chatResp.Message.Content
-				}
-
-				// Accumulate the complete message object
-				if accumulatedMessage.Role == "" {
-					accumulatedMessage.Role = chatResp.Message.Role
-				}
-				accumulatedMessage.Content += chatResp.Message.Content
-				if len(chatResp.Message.ToolCalls) > 0 {
-					accumulatedMessage.ToolCalls = append(accumulatedMessage.ToolCalls, chatResp.Message.ToolCalls...)
-				}
-
-				if chatResp.Done {
-					m.logger.Log("Received 'Done: true' from Ollama API.")
-					m.logger.Log(fmt.Sprintf("Final accumulated message content before parsing: %s", accumulatedMessage.Content))
-					finalResponse = chatResp
-					break
-				}
-			}
-
-			duration := time.Since(startTime)
-			tokensPerSecond := 0.0
-			if duration.Seconds() > 0 {
-				tokensPerSecond = float64(finalResponse.EvalCount) / duration.Seconds()
-			}
-			stats := fmt.Sprintf("Time: %.2fs | Tokens/sec: %.2f", duration.Seconds(), tokensPerSecond)
-			m.stream <- streamDoneMsg{stats: stats, finalMessage: accumulatedMessage} // Send the *accumulated* message
-		}(ctx)
-		return nil
-	}
-}

@@ -1,8 +1,3 @@
-// Package main implements a simple command‑line client for the
-// Ollama API. The code in this file contains helper functions for
-// interacting with the REST endpoints, converting model metadata, and
-// handling the streaming response.
-
 package main
 
 import (
@@ -13,23 +8,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-// streamChunkMsg represents a single chunk of streamed data.
-// It is sent to the TUI when a new chunk arrives.
-type streamChunkMsg string
-
-// streamDoneMsg signals that the stream has finished.
-// It carries the aggregated statistics and the final
-// response message.
-type streamDoneMsg struct {
-	stats        string
-	finalMessage Message
-}
-
-// errorMsg is a wrapper for errors that occur during the
-// stream handling process. It can be sent to the UI as a
-// tea.Msg.
-type errorMsg struct{ err error }
 
 // getModels retrieves the list of available models from the
 // Ollama server by issuing a GET request to /api/tags.

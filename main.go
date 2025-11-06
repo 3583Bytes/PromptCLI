@@ -14,6 +14,23 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// streamChunkMsg represents a single chunk of streamed data.
+// It is sent to the TUI when a new chunk arrives.
+type streamChunkMsg string
+
+// streamDoneMsg signals that the stream has finished.
+// It carries the aggregated statistics and the final
+// response message.
+type streamDoneMsg struct {
+	stats        string
+	finalMessage Message
+}
+
+// errorMsg is a wrapper for errors that occur during the
+// stream handling process. It can be sent to the UI as a
+// tea.Msg.
+type errorMsg struct{ err error }
+
 // loadPrompt reads the contents of the prompt file located at the given path.
 // It returns the file content as a string and any error that occurs.
 func loadPrompt(path string) (string, error) {
