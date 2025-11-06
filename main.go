@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -42,6 +43,10 @@ func loadPrompt(path string) (string, error) {
 }
 
 func main() {
+	// Define a command-line flag for chat-only mode. This allows the user to
+	// start the application without the system prompt that defines the tool-using agent persona.
+	chatOnly := flag.Bool("chatonly", false, "Enable chat-only mode, without the tool-using agent persona.")
+
 	// Determine the directory of the running executable.
 	exePath, err := os.Executable()
 	if err != nil {
@@ -88,6 +93,8 @@ func main() {
 		log.Fatal("No models found on the Ollama server.")
 	}
 
+	flag.Parse()
+
 	// Determine which model to use: a default from config or user selection.
 	var selectedModel string
 	if configs.DefaultLLM != "" {
@@ -123,10 +130,16 @@ func main() {
 	}
 
 	// Load the system prompt from a Markdown file; fall back to a default prompt if missing.
-	systemPrompt, err := loadPrompt("Prompt.MD")
-	if err != nil {
-		log.Printf("Warning: Could not load system prompt: %v", err)
+	var systemPrompt string
+	if *chatOnly {
 		systemPrompt = "You are a helpful assistant."
+	} else {
+		var err error
+		systemPrompt, err = loadPrompt("Prompt.MD")
+		if err != nil {
+			log.Printf("Warning: Could not load system prompt: %v", err)
+			systemPrompt = "You are a helpful assistant."
+		}
 	}
 
 	// Initialize the Bubble Tea model with the gathered configuration.

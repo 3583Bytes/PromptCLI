@@ -7,13 +7,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // getModels retrieves the list of available models from the
 // Ollama server by issuing a GET request to /api/tags.
 func getModels(baseURL string, logger *Logger) ([]Model, error) {
 	logger.Log(fmt.Sprintf("Attempting to get models from %s/api/tags", baseURL))
-	resp, err := http.Get(baseURL + "/api/tags")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Get(baseURL + "/api/tags")
 	if err != nil {
 		logger.Log(fmt.Sprintf("Error getting models: %v", err))
 		return nil, err
