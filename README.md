@@ -1,6 +1,6 @@
 # Prompt CLI
 
-A terminal-based code assistant & chat interface for interacting with [Ollama](https://ollama.ai) large language models (maybe others in future), simillar to Clude Code & Gemini CLI but designed to work with an Ollama service running on your network.  Currently the focus is to bridge the communication between the LLM and the device rather than creating a fully automatic agent.  This means the workflow is focused on sending a command to the LLM and receiving a command action, rather than creating a loop of commands until a set of tasks is done.  This may change in the future as local LLMs get more powerfull.
+A terminal-based code assistant & chat interface for interacting with [Ollama](https://ollama.ai) large language models (maybe others in future), simillar to Clude Code & Gemini CLI but designed to work with an Ollama service running on your network.  Currently the focus is to bridge the communication between the LLM and the device by sending a command to the LLM and receiving a command action that the application will process.  
 
 ---
 

@@ -24,7 +24,7 @@ import (
 
 var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
 var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))    // Red
-var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("12")) // Light Blue
+var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
 
 var devJokes = []string{
 	"Why do programmers prefer dark mode? Because light attracts bugs.",
@@ -296,9 +296,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Executed**: `%s`", toolName)
 
 					if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
+						// Find the last user message to provide context to the LLM.
+						var lastUserMessage string
+						for i := len(m.messages) - 1; i >= 0; i-- {
+							if m.messages[i].Role == "user" {
+								lastUserMessage = m.messages[i].Content
+								break
+							}
+						}
+
+						// Construct the new message with the original user message and the tool results.
+						newContent := fmt.Sprintf("%s\n\nTool results for `%s`:\n%s", lastUserMessage, toolName, responseToLLM)
+
 						// ... start new stream ...
-						m.logger.Log(fmt.Sprintf("Response to LLM: %s", responseToLLM))
-						m.messages = append(m.messages, Message{Role: "user", Content: responseToLLM, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
+						m.logger.Log(fmt.Sprintf("Response to LLM: %s", newContent))
+						m.messages = append(m.messages, Message{Role: "user", Content: newContent, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
 						ctx, cancel := context.WithCancel(context.Background())
 						m.cancel = cancel
 						m.sending = true
@@ -503,6 +515,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		m.streaming = true
 		m.stream = make(chan interface{})
 		m.currentJoke = devJokes[rand.Intn(len(devJokes))]
+		m.logger.Log(fmt.Sprintf("User input before sending to Ollama: %s", userInput))
 		m.messages = append(m.messages, Message{Role: "user", Content: userInput})
 		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 		m.viewport.SetContent(m.renderMessages())
@@ -543,7 +556,8 @@ func (m *model) renderMessages() string {
 		// If this is the last message, it's an assistant message, it's empty,
 		// and we are waiting for a response, render the joke.
 		if i == len(m.messages)-1 && msg.Role == "assistant" && msg.Content == "" && m.sending && m.currentJoke != "" {
-			md, _ := r.Render(fmt.Sprintf("%s\n\nThinking... %s\n\n---", role, m.currentJoke))
+			jokeText := fmt.Sprintf("## %s\n\nThinking... %s\n\n---", strings.Title(msg.Role), m.currentJoke)
+			md, _ := r.Render(jokeText)
 			content.WriteString(jokeStyle.Render(md))
 			continue
 		}
