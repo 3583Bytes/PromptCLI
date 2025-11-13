@@ -51,7 +51,7 @@ You may return at most one tool call per turn. The host will execute it and retu
   "version": "1.0",
   "thoughts": ["short internal note(s)"],
   "action": {
-    "tool": "list_files | read_file | write_file | append_file | delete_file | respond | git | web_search | visit_url",
+    "tool": "list_files | read_file | write_file | append_file | delete_file | respond | git | web_search | visit_url | read_all_files",
     "input": { /* tool-specific JSON */ }
   }
 }

@@ -24,7 +24,7 @@ import (
 
 var footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray
 var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))    // Red
-var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
+var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))    // Yellow
 
 var devJokes = []string{
 	"Why do programmers prefer dark mode? Because light attracts bugs.",
@@ -32,6 +32,16 @@ var devJokes = []string{
 	"What's the object-oriented way to become wealthy? Inheritance.",
 	"Why do Java developers wear glasses? Because they don't C#.",
 	"A programmer puts two glasses on his bedside table. One with water if he gets thirsty, and one empty in case he doesn't.",
+	"Debugging: Removing the needles from the haystack and then finding out you put them there.",
+	"Why was the JavaScript developer sad? Because he didn't Node how to Express himself.",
+	"There are 10 types of people in the world: those who understand binary, and those who don't.",
+	"What's a programmer's favorite place to hang out? Foo Bar.",
+	"Why do programmers always mix up Halloween and Christmas? Because Oct 31 == Dec 25.",
+	"How many programmers does it take to change a light bulb? None, that's a hardware problem.",
+	"What's the best thing about a boolean? Even if you're wrong, you're only off by a bit.",
+	"Why do C++ programmers prefer to use the old C-style casts? Because they're tired of `dynamic_cast` failing at runtime.",
+	"What do you call a programmer who can't code? A debugger.",
+	"My code doesn't have bugs, it has unexpected features.",
 }
 
 type focusable int
@@ -257,9 +267,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.logger.Log(fmt.Sprintf("Could not extract JSON: %v", err))
 				} else {
 					var llmResponse LLMResponse
-										if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
-												m.logger.Log(fmt.Sprintf("Unmarshaled LLMResponse: %+v", llmResponse))
-												if llmResponse.Action.Tool != "" {							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
+					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
+						m.logger.Log(fmt.Sprintf("Unmarshaled LLMResponse: %+v", llmResponse))
+						if llmResponse.Action.Tool != "" {
+							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
 							isToolCall = true
 							toolName = llmResponse.Action.Tool
 							input = llmResponse.Action.Input
@@ -556,12 +567,30 @@ func (m *model) renderMessages() string {
 		// If this is the last message, it's an assistant message, it's empty,
 		// and we are waiting for a response, render the joke.
 		if i == len(m.messages)-1 && msg.Role == "assistant" && msg.Content == "" && m.sending && m.currentJoke != "" {
-			jokeText := fmt.Sprintf("## %s\n\nThinking... %s\n\n---", strings.Title(msg.Role), m.currentJoke)
-			styledJoke := jokeStyle.Copy().
-				Width(m.viewport.Width - 2).
-				PaddingLeft(2).
-				Render(jokeText)
-			content.WriteString(styledJoke)
+			// Create a plain glamour renderer that only does word wrapping, no colors.
+			// We subtract 2 for the padding we're adding manually.
+			plainRenderer, _ := glamour.NewTermRenderer(
+				glamour.WithWordWrap(m.viewport.Width - 2),
+			)
+
+			renderedJoke, _ := plainRenderer.Render(m.currentJoke)
+
+			// 1. Style the joke content part with yellow
+			yellowJoke := jokeStyle.Render(renderedJoke)
+
+			// 2. Render the separator
+			separator, _ := plainRenderer.Render("---")
+
+			// 3. Join the parts vertically
+			fullBlock := lipgloss.JoinVertical(lipgloss.Left,
+				yellowJoke,
+				separator,
+			)
+
+			// 4. Add left padding to the whole block for indentation
+			indentedBlock := lipgloss.NewStyle().PaddingLeft(2).Render(fullBlock)
+
+			content.WriteString(indentedBlock)
 			continue
 		}
 
@@ -651,5 +680,3 @@ func (m *model) View() string {
 		footer,
 	)
 }
-
-
