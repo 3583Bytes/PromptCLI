@@ -557,8 +557,11 @@ func (m *model) renderMessages() string {
 		// and we are waiting for a response, render the joke.
 		if i == len(m.messages)-1 && msg.Role == "assistant" && msg.Content == "" && m.sending && m.currentJoke != "" {
 			jokeText := fmt.Sprintf("## %s\n\nThinking... %s\n\n---", strings.Title(msg.Role), m.currentJoke)
-			md, _ := r.Render(jokeText)
-			content.WriteString(jokeStyle.Render(md))
+			styledJoke := jokeStyle.Copy().
+				Width(m.viewport.Width - 2).
+				PaddingLeft(2).
+				Render(jokeText)
+			content.WriteString(styledJoke)
 			continue
 		}
 
