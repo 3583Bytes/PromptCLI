@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 		return ch.handleWriteFile(input)
 	case "read_file":
 		return ch.handleReadFile(input)
+	case "read_all_files":
+		return ch.handleReadAllFiles(input)
 	case "list_files":
 		return ch.handleListFiles(input)
 	case "delete_file":
@@ -121,6 +124,57 @@ func (ch *CommandHandler) handleReadFile(input map[string]interface{}) string {
 	}
 
 	return string(content)
+}
+
+func (ch *CommandHandler) handleReadAllFiles(input map[string]interface{}) string {
+	glob, ok := input["glob"].(string)
+	if !ok || glob == "" {
+		return "Error: 'glob' pattern not specified or not a string for read_all_files."
+	}
+
+	path, _ := input["path"].(string)
+	if path == "" {
+		path = "."
+	}
+
+	fsys := os.DirFS(path)
+	filePaths, err := doublestar.Glob(fsys, glob)
+	if err != nil {
+		return fmt.Sprintf("Error matching glob pattern '%s': %v", glob, err)
+	}
+
+	if len(filePaths) == 0 {
+		return fmt.Sprintf("No files found matching glob pattern '%s' in directory '%s'", glob, path)
+	}
+
+	var builder strings.Builder
+
+	for _, filePath := range filePaths {
+		// doublestar.Glob returns paths relative to the fsys root, so we need to join them with the base path
+		// to read the actual file from the OS.
+		fullPath := filepath.Join(path, filePath)
+
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			// Log the error but continue with other files
+			ch.model.logger.Log(fmt.Sprintf("Error reading file '%s', skipping: %v", fullPath, err))
+			continue
+		}
+
+		header := fmt.Sprintf("---\nFile: %s\n---\n", filePath) // Use relative path in header for clarity
+		builder.WriteString(header)
+		builder.Write(content)
+		builder.WriteString("\n\n")
+	}
+
+	// Handle max_bytes
+	maxBytes, _ := input["max_bytes"].(float64)
+	output := builder.String()
+	if maxBytes > 0 && len(output) > int(maxBytes) {
+		output = output[:int(maxBytes)]
+	}
+
+	return output
 }
 
 func (ch *CommandHandler) handleWriteFile(input map[string]interface{}) string {

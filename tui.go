@@ -330,7 +330,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
 						m.viewport.SetContent(m.renderMessages())
 						m.viewport.GotoBottom()
-						return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
+						return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
 					}
 				}
 			}
@@ -357,6 +357,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = newWidth
 		m.viewport.Height = msg.Height - textAreaRenderedHeight
 		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
 		m.textarea, taCmd = m.textarea.Update(msg)
 		m.viewport, vpCmd = m.viewport.Update(msg)
 
@@ -533,7 +534,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 
 		m.textarea.Reset()
 		m.viewport.GotoBottom()
-		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
+		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
 	}
 	return m, nil
 }

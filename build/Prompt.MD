@@ -21,8 +21,9 @@ You may return at most one tool call per turn. The host will execute it and retu
 - read_file
   - input: {"path": "string", "max_bytes": "integer | null"}
 - read_all_files
-  - input: {"path": "string", "max_bytes": "integer | null"}
-  - purpose: read all files in the specified directory, concatenating their contents.  
+  - purpose: read all files in a directory matching a glob pattern (e.g., "**/*.go"), concatenating their contents.
+  - input: {"path": "string | nullable", "glob": "string", "max_bytes": "integer | null"}
+  - notes: The output will be a single string where each file's content is preceded by a header like "--- File: path/to/file.go ---".
 - write_file
   - input: {"path": "string", "content": "string", "mode": "overwrite | create_only"}
 - append_file

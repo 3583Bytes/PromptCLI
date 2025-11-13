@@ -27,7 +27,9 @@ func NewOllamaClient(apiURL string, logger *Logger) *OllamaClient {
 	}
 }
 
-func (c *OllamaClient) startStreamCmd(ctx context.Context, modelName string, messages []Message, stream chan interface{}, wg *sync.WaitGroup) tea.Cmd {
+
+
+func (c *OllamaClient) startStreamCmd(ctx context.Context, modelName string, messages []Message, contextLength int64, stream chan interface{}, wg *sync.WaitGroup) tea.Cmd {
 	return func() tea.Msg {
 		go func(ctx context.Context) {
 			defer close(stream)
@@ -36,6 +38,7 @@ func (c *OllamaClient) startStreamCmd(ctx context.Context, modelName string, mes
 				Model:    modelName,
 				Messages: messages,
 				Stream:   true,
+				Options:  Options{NumCtx: contextLength},
 			}
 			reqBody, err := json.Marshal(req)
 			if err != nil {

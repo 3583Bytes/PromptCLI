@@ -65,6 +65,11 @@ type ModelInfo struct {
 	GptossContextLength  interface{} `json:"gptoss.context_length,omitempty"`
 }
 
+// Options represents the options for a chat request.
+type Options struct {
+	NumCtx int64 `json:"num_ctx,omitempty"`
+}
+
 // ChatRequest represents a request to the chat endpoint.
 // It contains the model, a sequence of messages, and a flag
 // indicating whether the response should be streamed.
@@ -72,6 +77,7 @@ type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
+	Options  Options   `json:"options,omitempty"`
 }
 
 // Message is an individual chat message.  It may contain tool

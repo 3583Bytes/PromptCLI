@@ -12,6 +12,7 @@ type Config struct {
 	OllamaServerPort int    `json:"ollama_server_port"`
 	DefaultLLM       string `json:"default_llm"`
 	LogEnabled       bool   `json:"log_enabled,omitempty"`
+	ContextLength    int64  `json:"context_length,omitempty"`
 }
 
 // LoadConfig loads the configuration from the specified file path
@@ -45,6 +46,9 @@ func LoadConfig(path string) (*Config, error) {
 	if config.OllamaServerPort == 0 {
 		config.OllamaServerPort = 11434 // Default Ollama port
 	}
+	if config.ContextLength == 0 {
+		config.ContextLength = 8192 // Default context length
+	}
 
 	return config, nil
 }
@@ -56,6 +60,9 @@ func ValidateConfig(config *Config) error {
 	}
 	if config.OllamaServerPort <= 0 {
 		return fmt.Errorf("ollama server port must be greater than 0")
+	}
+	if config.ContextLength <= 0 {
+		return fmt.Errorf("context length must be greater than 0")
 	}
 	return nil
 }
