@@ -61,33 +61,35 @@ const (
 )
 
 type model struct {
-	viewport         viewport.Model
-	textarea         textarea.Model
-	messages         []Message
-	apiURL           string
-	modelName        string
-	modelContextSize int64 // Store context window size
-	sending          bool
-	error            error
-	stats            string
-	focused          focusable
-	streaming        bool
-	aiResponse       string
-	stream           chan interface{}
-	cancel           context.CancelFunc
-	fileSearchActive bool
-	fileSearchTerm   string
-	fileSearchResult string
-	files            []string
-	spinner          spinner.Model
-	wg               *sync.WaitGroup
-	logger           *Logger
-	commandHandler   *CommandHandler
-	ollamaClient     *OllamaClient
-	history          []string
-	historyCursor    int
-	ctrlCpressed     bool
-	currentJoke      string
+	viewport          viewport.Model
+	textarea          textarea.Model
+	messages          []Message
+	apiURL            string
+	modelName         string
+	modelContextSize  int64 // Store context window size
+	sending           bool
+	error             error
+	stats             string
+	focused           focusable
+	streaming         bool
+	aiResponse        string
+	stream            chan interface{}
+	cancel            context.CancelFunc
+	fileSearchActive  bool
+	fileSearchTerm    string
+	fileSearchResult  string
+	files             []string
+	spinner           spinner.Model
+	wg                *sync.WaitGroup
+	logger            *Logger
+	commandHandler    *CommandHandler
+	ollamaClient      *OllamaClient
+	history           []string
+	historyCursor     int
+	ctrlCpressed      bool
+	currentJoke       string
+	permissionRequest *Action         // Stores the command that needs permission. If nil, not waiting.
+	alwaysAllow       map[string]bool // Stores permissions for "Always Allow". Key combines toolName and relevant path.
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *Logger) *model {
@@ -163,6 +165,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		ollamaClient:     NewOllamaClient(apiURL, logger),
 		history:          []string{},
 		historyCursor:    -1,
+		alwaysAllow:      make(map[string]bool), // Initialize the map
 	}
 
 	m.commandHandler = NewCommandHandler(m)
@@ -178,6 +181,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		taCmd tea.Cmd
 		vpCmd tea.Cmd
 	)
+
+	// Handle permission request state first
+	if m.permissionRequest != nil {
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			var focusCmd tea.Cmd
+			m.focused = focusTextarea
+			focusCmd = m.textarea.Focus()
+
+			switch strings.ToLower(msg.String()) {
+			case "a": // Allow once
+				action := m.permissionRequest
+				m.permissionRequest = nil // Return to normal state
+				model, execCmd := m.executeAndRespond(action.Tool, action.Input)
+				return model, tea.Batch(focusCmd, execCmd, tea.ClearScreen)
+
+			case "y": // Yes to all
+				action := m.permissionRequest
+				if path, ok := action.Input["path"].(string); ok {
+					permissionKey := fmt.Sprintf("%s:%s", action.Tool, path)
+					m.alwaysAllow[permissionKey] = true
+				}
+				m.permissionRequest = nil // Return to normal state
+				model, execCmd := m.executeAndRespond(action.Tool, action.Input)
+				return model, tea.Batch(focusCmd, execCmd, tea.ClearScreen)
+
+			case "n": // No
+				details := m.renderCommandDetails(m.permissionRequest)
+				deniedMsg := fmt.Sprintf("Command denied by user:\n\n%s", details)
+				m.messages[len(m.messages)-1].Content = deniedMsg
+				m.viewport.SetContent(m.renderMessages())
+				m.viewport.GotoBottom()
+				m.permissionRequest = nil // Return to normal state
+				return m, tea.Batch(focusCmd, tea.ClearScreen)
+			}
+		}
+		// Ignore other messages while waiting for permission
+		return m, nil
+	}
 
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
@@ -258,94 +299,49 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats = msg.stats
 
 			finalMessage := msg.finalMessage // This is the full accumulated message
-			var toolName string
-			var input map[string]interface{}
-			var isToolCall bool = false
+			var llmAction *Action
 
 			// Prefer native tool_calls format
 			if len(finalMessage.ToolCalls) > 0 {
 				m.logger.Log("Found native tool_calls.")
-				isToolCall = true
 				call := finalMessage.ToolCalls[0] // Assuming one call
-				toolName = call.Function.Name
-				input = call.Function.Arguments
+				llmAction = &Action{
+					Tool:  call.Function.Name,
+					Input: call.Function.Arguments,
+				}
 			} else if finalMessage.Content != "" {
 				// Fallback for older action-in-content format
 				jsonStr, err := extractJSON(finalMessage.Content)
-				if err != nil {
-					m.logger.Log(fmt.Sprintf("Could not extract JSON: %v", err))
-				} else {
+				if err == nil {
 					var llmResponse LLMResponse
 					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
-						m.logger.Log(fmt.Sprintf("Unmarshaled LLMResponse: %+v", llmResponse))
 						if llmResponse.Action.Tool != "" {
-							m.logger.Log(fmt.Sprintf("Successfully parsed action-in-content JSON. Tool: '%s'", llmResponse.Action.Tool))
-							isToolCall = true
-							toolName = llmResponse.Action.Tool
-							input = llmResponse.Action.Input
-						} else {
-							m.logger.Log("Parsed JSON, but tool name is empty. Not a tool call.")
+							llmAction = &llmResponse.Action
 						}
-					} else {
-						m.logger.Log(fmt.Sprintf("Failed to unmarshal JSON from extractJSON: %v", err))
 					}
 				}
 			}
 
-			if isToolCall {
-				if toolName == "respond" {
-					m.logger.Log("Handling 'respond' tool.")
-					var message string
-					if msgStr, ok := input["message"].(string); ok {
-						message = msgStr
-					} else if msgArr, ok := input["message"].([]interface{}); ok {
-						var parts []string
-						for _, item := range msgArr {
-							if part, ok := item.(string); ok {
-								parts = append(parts, part)
-							}
-						}
-						message = strings.Join(parts, "\n")
-					}
-					if message != "" {
-						m.logger.Log(fmt.Sprintf("Extracted message for UI: '%.60s...'.", message))
-						m.messages[len(m.messages)-1].Content = message
-					}
-				} else {
-					// Format "Command Received" and execute
-					m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Executed**: `%s`", toolName)
+			if llmAction != nil {
+				toolName := llmAction.Tool
+				isDestructive := toolName == "write_file" || toolName == "append_file" || toolName == "delete_file"
 
-					if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
-						// Find the last user message to provide context to the LLM.
-						var lastUserMessage string
-						for i := len(m.messages) - 1; i >= 0; i-- {
-							if m.messages[i].Role == "user" {
-								lastUserMessage = m.messages[i].Content
-								break
-							}
-						}
-
-						// Construct the new message with the original user message and the tool results.
-						newContent := fmt.Sprintf("%s\n\nTool results for `%s`:\n%s", lastUserMessage, toolName, responseToLLM)
-
-						// ... start new stream ...
-						m.logger.Log(fmt.Sprintf("Response to LLM: %s", newContent))
-						m.messages = append(m.messages, Message{Role: "user", Content: newContent, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
-						ctx, cancel := context.WithCancel(context.Background())
-						m.cancel = cancel
-						m.sending = true
-						m.streaming = true
-						m.stream = make(chan interface{})
-						m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
-						m.viewport.SetContent(m.renderMessages())
-						m.viewport.GotoBottom()
-						return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
-					}
+				var permissionKey string
+				if path, ok := llmAction.Input["path"].(string); ok {
+					permissionKey = fmt.Sprintf("%s:%s", toolName, path)
 				}
-			}
-			// If it wasn't a tool call, the content is just plain text and is already accumulated correctly.
 
-			// Final render
+				if isDestructive && !m.alwaysAllow[permissionKey] {
+					m.permissionRequest = llmAction
+					m.viewport.SetContent(m.renderMessages())
+					m.viewport.GotoBottom()
+					return m, nil
+				}
+
+				return m.executeAndRespond(llmAction.Tool, llmAction.Input)
+			}
+
+			// If it wasn't a tool call, the content is just plain text.
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 		}
@@ -377,6 +373,67 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(taCmd, vpCmd)
 }
+
+func (m *model) executeAndRespond(toolName string, input map[string]interface{}) (tea.Model, tea.Cmd) {
+	if toolName == "respond" {
+		m.logger.Log("Handling 'respond' tool.")
+		var message string
+		if msgStr, ok := input["message"].(string); ok {
+			message = msgStr
+		} else if msgArr, ok := input["message"].([]interface{}); ok {
+			var parts []string
+			for _, item := range msgArr {
+				if part, ok := item.(string); ok {
+					parts = append(parts, part)
+				}
+			}
+			message = strings.Join(parts, "\n")
+		}
+		if message != "" {
+			m.logger.Log(fmt.Sprintf("Extracted message for UI: '%.60s...'.", message))
+			m.messages[len(m.messages)-1].Content = message
+		}
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	// Format "Command Executed" and execute
+	m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Executed**: `%s`", toolName)
+
+	if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
+		// Find the last user message to provide context to the LLM.
+		var lastUserMessage string
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].Role == "user" {
+				lastUserMessage = m.messages[i].Content
+				break
+			}
+		}
+
+		// Construct the new message with the original user message and the tool results.
+		newContent := fmt.Sprintf("%s\n\nTool results for `%s`:\n%s", lastUserMessage, toolName, responseToLLM)
+
+		// ... start new stream ...
+		m.logger.Log(fmt.Sprintf("Response to LLM: %s", newContent))
+		m.messages = append(m.messages, Message{Role: "user", Content: newContent, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		m.sending = true
+		m.streaming = true
+		m.stream = make(chan interface{})
+		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
+	}
+
+	// If command had no response to send to LLM
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
 func (m *model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focused != focusTextarea {
 		return m, nil
@@ -655,9 +712,47 @@ func (m *model) calculateUsedTokens() int {
 	return (totalWords * 4) / 3
 }
 
+// renderCommandDetails formats a command (Action) into a human-readable string for the permission prompt.
+func (m *model) renderCommandDetails(action *Action) string {
+	var details strings.Builder
+	details.WriteString(fmt.Sprintf("Tool: %s\n", action.Tool))
+
+	for key, value := range action.Input {
+		// Don't show content for write/append, it can be long
+		if (action.Tool == "write_file" || action.Tool == "append_file") && key == "content" {
+			continue // Skip rendering the content field
+		}
+
+		details.WriteString(fmt.Sprintf("%s: ", strings.Title(key)))
+		switch v := value.(type) {
+		case string:
+			details.WriteString(fmt.Sprintf("%q\n", v))
+		case float64: // JSON numbers are float64 in Go
+			details.WriteString(fmt.Sprintf("%v\n", v))
+		case bool:
+			details.WriteString(fmt.Sprintf("%t\n", v))
+		default:
+			details.WriteString(fmt.Sprintf("%v\n", v))
+		}
+	}
+	return details.String()
+}
+
 func (m *model) View() string {
 	if m.error != nil {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
+	}
+
+	// If we are waiting for permission, show the permission prompt.
+	if m.permissionRequest != nil {
+		m.textarea.Blur()
+		m.focused = focusViewport
+		details := m.renderCommandDetails(m.permissionRequest)
+		prompt := fmt.Sprintf("The model wants to execute the following command:\n\n%s\nDo you want to proceed?\n\n(A)llow Once   (Y)es to All   (N)o / Display Command", details)
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			lipgloss.NewStyle().Border(lipgloss.DoubleBorder(), true).BorderForeground(lipgloss.Color("1")).Padding(1).Render(prompt),
+		)
 	}
 
 	if m.ctrlCpressed {
@@ -690,7 +785,7 @@ func (m *model) View() string {
 			if remainingTokens < 0 {
 				remainingTokens = 0
 			}
-			contextInfo = fmt.Sprintf("Context: %d | Used: %d ", m.modelContextSize, usedTokens)
+			contextInfo = fmt.Sprintf("Context: %d | Used: %d", m.modelContextSize, usedTokens)
 		} else {
 			contextInfo = "Context: N/A"
 		}
