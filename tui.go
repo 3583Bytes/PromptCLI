@@ -690,7 +690,7 @@ func (m *model) View() string {
 			if remainingTokens < 0 {
 				remainingTokens = 0
 			}
-			contextInfo = fmt.Sprintf("Context: %d | Used: %d | Remaining: %d", m.modelContextSize, usedTokens, remainingTokens)
+			contextInfo = fmt.Sprintf("Context: %d | Used: %d ", m.modelContextSize, usedTokens)
 		} else {
 			contextInfo = "Context: N/A"
 		}
