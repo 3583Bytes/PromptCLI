@@ -477,10 +477,31 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 
 	if !m.sending {
 		switch userInput {
+		case "/new":
+			// Preserve the system prompt, which is the first message
+			if len(m.messages) > 0 {
+				m.messages = []Message{m.messages[0]}
+			} else {
+				m.messages = []Message{}
+			}
+			// Clear any active streaming/sending state
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.streaming = false
+			m.sending = false
+			m.stats = ""
+			m.currentJoke = ""
+
+			// Update the view
+			m.viewport.SetContent(m.renderMessages())
+			m.textarea.Reset()
+			m.viewport.GotoBottom()
+			return m, nil
 		case "/bye":
 			return m, tea.Quit
 		case "/help":
-			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/bye - Exit the application /help - Show this help message /stop - Stop the current response /log - Toggle logging to a file /copy - Copy the last response to the clipboard"})
+			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/new - Start a new chat session\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file\n/copy - Copy the last response to the clipboard"})
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
