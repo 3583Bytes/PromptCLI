@@ -12,8 +12,22 @@ jobs:
 
     strategy:
       matrix:
-        goos: [linux, windows, darwin]
-        goarch: [amd64]  # add arm64 here if you want
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: promptcli-linux-amd64
+
+          - goos: windows
+            goarch: amd64
+            artifact: promptcli-windows-amd64
+
+          - goos: darwin
+            goarch: amd64
+            artifact: promptcli-macos-intel
+
+          - goos: darwin
+            goarch: arm64
+            artifact: promptcli-macos-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -21,27 +35,25 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25.1'   # or 'stable' / '1.22.x' etc.
+          go-version: "1.25.1"
 
       - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
-          mkdir -p .build/${{ matrix.goos }}-${{ matrix.goarch }}
+          mkdir -p .build/${{ matrix.artifact }}
 
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".exe"
           fi
 
-          # Cross-compile for the target OS/ARCH
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build -o .build/${{ matrix.goos }}-${{ matrix.goarch }}/promptcli${EXT}
+            go build -o .build/${{ matrix.artifact }}/promptcli${EXT}
 
-          # Copy assets into that platform's build folder
-          cp config.json .build/${{ matrix.goos }}-${{ matrix.goarch }}/
-          cp Prompt.MD   .build/${{ matrix.goos }}-${{ matrix.goarch }}/
+          cp config.json .build/${{ matrix.artifact }}/
+          cp Prompt.MD   .build/${{ matrix.artifact }}/
 
-      - name: Upload ${{ matrix.goos }}-${{ matrix.goarch }} artifact
+      - name: Upload artifact ${{ matrix.artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: promptcli-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: .build/${{ matrix.goos }}-${{ matrix.goarch }}/**
+          name: ${{ matrix.artifact }}
+          path: .build/${{ matrix.artifact }}/**
