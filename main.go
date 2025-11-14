@@ -120,15 +120,6 @@ func main() {
 		selectedModel = models[choice-1].Name
 	}
 
-	// Fetch model details to determine the context window size.
-	modelDetails, err := getModelDetails(baseURL, selectedModel)
-	var contextSize int64 = 0 // Default to 0 if details are unavailable.
-	if err != nil {
-		log.Printf("Warning: Could not get model details for %s: %v", selectedModel, err)
-	} else if modelDetails != nil {
-		contextSize = extractContextLength(&modelDetails.ModelInfo)
-	}
-
 	// Load the system prompt from a Markdown file; fall back to a default prompt if missing.
 	var systemPrompt string
 	if *chatOnly {
@@ -143,7 +134,8 @@ func main() {
 	}
 
 	// Initialize the Bubble Tea model with the gathered configuration.
-	m := initialModel(baseURL, selectedModel, contextSize, systemPrompt, configs.LogEnabled, logger)
+	// The contextSize is now taken directly from the config file.
+	m := initialModel(baseURL, selectedModel, configs.ContextLength, systemPrompt, configs.LogEnabled, logger)
 
 	// Create a new Bubble Tea program with alternate screen and mouse support.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())

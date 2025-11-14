@@ -27,13 +27,13 @@ var errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))    // Red
 var jokeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))    // Yellow
 
 var devJokes = []string{
-	"Why do programmers prefer dark mode? Because light attracts bugs.",
-	"Why did the programmer quit his job? Because he didn't get arrays.",
-	"What's the object-oriented way to become wealthy? Inheritance.",
-	"Why do Java developers wear glasses? Because they don't C#.",
-	"A programmer puts two glasses on his bedside table. One with water if he gets thirsty, and one empty in case he doesn't.",
+	"Running sudo make me a sandwich...",
+	"Dividing everything by zero...",
+	"Just a second... debugging reality...",
+	"Thinking...or just pretending to think really hard so you don’t get bored",
+	"Polishing the pixels...",
 	"Debugging: Removing the needles from the haystack and then finding out you put them there.",
-	"Why was the JavaScript developer sad? Because he didn't Node how to Express himself.",
+	"Recalibrating the humor-o-meter.",
 	"There are 10 types of people in the world: those who understand binary, and those who don't.",
 	"What's a programmer's favorite place to hang out? Foo Bar.",
 	"Why do programmers always mix up Halloween and Christmas? Because Oct 31 == Dec 25.",
@@ -613,6 +613,17 @@ func (m *model) updateFileList() {
 	m.files = fileNames
 }
 
+// calculateUsedTokens approximates the number of tokens used in the current chat history.
+// NOTE: This is a rough approximation using the heuristic of 1 token ~= 4 characters.
+// A proper implementation would require a dedicated tokenizer for the specific model.
+func (m *model) calculateUsedTokens() int {
+	totalChars := 0
+	for _, msg := range m.messages {
+		totalChars += len(msg.Content)
+	}
+	return totalChars / 4
+}
+
 func (m *model) View() string {
 	if m.error != nil {
 		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
@@ -643,7 +654,12 @@ func (m *model) View() string {
 
 		var contextInfo string
 		if m.modelContextSize > 0 {
-			contextInfo = fmt.Sprintf("Context: %d", m.modelContextSize)
+			usedTokens := m.calculateUsedTokens()
+			remainingTokens := m.modelContextSize - int64(usedTokens)
+			if remainingTokens < 0 {
+				remainingTokens = 0
+			}
+			contextInfo = fmt.Sprintf("Context: %d | Used: %d | Remaining: %d", m.modelContextSize, usedTokens, remainingTokens)
 		} else {
 			contextInfo = "Context: N/A"
 		}
