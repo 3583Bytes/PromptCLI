@@ -1,0 +1,59 @@
+name: Go
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: promptcli-linux-amd64
+
+          - goos: windows
+            goarch: amd64
+            artifact: promptcli-windows-amd64
+
+          - goos: darwin
+            goarch: amd64
+            artifact: promptcli-macos-intel
+
+          - goos: darwin
+            goarch: arm64
+            artifact: promptcli-macos-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.25.1"
+
+      - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          mkdir -p .build/${{ matrix.artifact }}
+
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+          fi
+
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -o .build/${{ matrix.artifact }}/promptcli${EXT}
+
+          cp config.json .build/${{ matrix.artifact }}/
+          cp Prompt.MD   .build/${{ matrix.artifact }}/
+
+      - name: Upload artifact ${{ matrix.artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: .build/${{ matrix.artifact }}/**
