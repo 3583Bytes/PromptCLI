@@ -1,6 +1,3 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go
 
 on:
@@ -10,29 +7,41 @@ on:
     branches: [ "master" ]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64]  # add arm64 here if you want
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25.1'
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.1'   # or 'stable' / '1.22.x' etc.
 
-    - name: Build
-      run:
-          mkdir -p .build
-          go build -o .build/promptcli.exe
-    - name: Copy assets to build folder
-      run: |-
-          cp config.json .build/
-          cp Prompt.MD .build/
+      - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          mkdir -p .build/${{ matrix.goos }}-${{ matrix.goarch }}
 
-    - name: Upload
-      uses: actions/upload-artifact@v4
-      with:
-          name: promptcli
-          path: .build/**
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+          fi
 
+          # Cross-compile for the target OS/ARCH
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          go build -o .build/${{ matrix.goos }}-${{ matrix.goarch }}/promptcli${EXT}
+
+          # Copy assets into that platform's build folder
+          cp config.json .build/${{ matrix.goos }}-${{ matrix.goarch }}/
+          cp Prompt.MD   .build/${{ matrix.goos }}-${{ matrix.goarch }}/
+
+      - name: Upload ${{ matrix.goos }}-${{ matrix.goarch }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptcli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: .build/${{ matrix.goos }}-${{ matrix.goarch }}/**
