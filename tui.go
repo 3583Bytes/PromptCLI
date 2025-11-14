@@ -34,14 +34,23 @@ var devJokes = []string{
 	"Polishing the pixels...",
 	"Debugging: Removing the needles from the haystack and then finding out you put them there.",
 	"Recalibrating the humor-o-meter.",
-	"There are 10 types of people in the world: those who understand binary, and those who don't.",
-	"What's a programmer's favorite place to hang out? Foo Bar.",
-	"Why do programmers always mix up Halloween and Christmas? Because Oct 31 == Dec 25.",
-	"How many programmers does it take to change a light bulb? None, that's a hardware problem.",
-	"What's the best thing about a boolean? Even if you're wrong, you're only off by a bit.",
-	"Why do C++ programmers prefer to use the old C-style casts? Because they're tired of `dynamic_cast` failing at runtime.",
-	"What do you call a programmer who can't code? A debugger.",
-	"My code doesn't have bugs, it has unexpected features.",
+	"Calibrating flux capacitor… please hold.",
+	"Bribing the server hamsters with sunflower seeds...",
+	"Decrypting the Matrix… one typo at a time.",
+	"Counting to infinity… twice.",
+	"Rendering the pixels’ good side...",
+	"Evaluating existential crises…",
+	"Consulting the sacred Stack Overflow scrolls...",
+	"Loading… because everything is better when it loads.",
+	"Feeding the AI some fresh data snacks…",
+	"Debugging the debugging process…",
+	"Waiting for the server’s coffee to kick in..",
+	"Enabling quantum nonsense mode…",
+	"Rearranging the alphabet for efficiency…",
+	"Optimizing the unoptimized optimizer...",
+	"Checking if the internet is still plugged in…",
+	"Attempting to physics…",
+	"Rebooting your patience…",
 }
 
 type focusable int
@@ -614,14 +623,15 @@ func (m *model) updateFileList() {
 }
 
 // calculateUsedTokens approximates the number of tokens used in the current chat history.
-// NOTE: This is a rough approximation using the heuristic of 1 token ~= 4 characters.
+// NOTE: This is a rough approximation using the heuristic of 3 words ~= 4 tokens.
 // A proper implementation would require a dedicated tokenizer for the specific model.
 func (m *model) calculateUsedTokens() int {
-	totalChars := 0
+	totalWords := 0
 	for _, msg := range m.messages {
-		totalChars += len(msg.Content)
+		totalWords += len(strings.Fields(msg.Content))
 	}
-	return totalChars / 4
+	// Approximate 3 words to 4 tokens
+	return (totalWords * 4) / 3
 }
 
 func (m *model) View() string {
