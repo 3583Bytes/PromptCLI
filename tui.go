@@ -90,6 +90,7 @@ type model struct {
 	currentJoke       string
 	permissionRequest *Action         // Stores the command that needs permission. If nil, not waiting.
 	alwaysAllow       map[string]bool // Stores permissions for "Always Allow". Key combines toolName and relevant path.
+	yoloMode          bool            // When true, bypasses all permission checks.
 }
 
 func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *Logger) *model {
@@ -166,6 +167,7 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		history:          []string{},
 		historyCursor:    -1,
 		alwaysAllow:      make(map[string]bool), // Initialize the map
+		yoloMode:         false,                 // Default to false
 	}
 
 	m.commandHandler = NewCommandHandler(m)
@@ -240,6 +242,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.Type {
+		case tea.KeyCtrlY:
+			m.yoloMode = !m.yoloMode
+			var statusMsg string
+			if m.yoloMode {
+				statusMsg = "YOLO mode enabled. All commands will be executed without permission."
+			} else {
+				statusMsg = "YOLO mode disabled. Destructive commands will require permission."
+			}
+			m.messages = append(m.messages, Message{Role: "assistant", Content: statusMsg})
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
 		case tea.KeyCtrlC:
 			m.ctrlCpressed = true
 			if m.sending {
@@ -331,7 +345,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					permissionKey = fmt.Sprintf("%s:%s", toolName, path)
 				}
 
-				if isDestructive && !m.alwaysAllow[permissionKey] {
+				if isDestructive && !m.alwaysAllow[permissionKey] && !m.yoloMode {
 					m.permissionRequest = llmAction
 					m.viewport.SetContent(m.renderMessages())
 					m.viewport.GotoBottom()
@@ -790,7 +804,12 @@ func (m *model) View() string {
 			contextInfo = "Context: N/A"
 		}
 
-		footerText := fmt.Sprintf("Model: %s | %s | %s", m.modelName, contextInfo, stats)
+		var yoloIndicator string
+		if m.yoloMode {
+			yoloIndicator = " | YOLO"
+		}
+
+		footerText := fmt.Sprintf("Model: %s | %s | %s%s", m.modelName, contextInfo, stats, yoloIndicator)
 		leftFooter = footerStyle.Render(footerText)
 	}
 

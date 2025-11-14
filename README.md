@@ -55,9 +55,9 @@ The LLM is forced to use json as it's communication method via Prompt.MD and the
   - `/stop` – Stop the current response mid-stream 
   - `/new` – New session freeing up context window
   - `/log` – Toggle logging
-  
+  - `/copy` – Copy last response from LLM
   - `@` - Reference a file in the current or sub folder to upload as part of the chat context.
-
+  - `Ctrl-y` – Toggle yolo mode (bypass user permission)
 ---
 
 ## 📦 Currently Out of Scope
