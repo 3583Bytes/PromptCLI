@@ -70,4 +70,4 @@ Clone this repo and build:
 ```bash
 git clone https://github.com/3583Bytes/PromptCLI.git
 cd PromptCLI
-go build -o .build/promptcli.exe main.go
+go build -o .build/promptcli.exe
