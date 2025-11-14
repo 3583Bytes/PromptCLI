@@ -27,7 +27,6 @@ jobs:
           go build -o .build/promptcli.exe
     - name: Copy assets to build folder
       run: |-
-          mkdir -p .build
           cp config.json .build/
           cp Prompt.MD .build/
 
