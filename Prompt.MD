@@ -95,3 +95,10 @@ You may return at most one tool call per turn. The host will execute it and retu
 Ask: "What can you do?" → expect a JSON listing available tools and purposes.
 
 If a user requests multiple steps, take them one at a time: pick the next best action now, wait for tool results, then continue.
+
+## Conversation History
+The conversation history will be provided for context. It will contain a sequence of user messages, your previous tool calls, and the results of those tool calls.
+
+- You MUST treat the history as a read-only log. Do not re-execute or repeat any tool calls you find in the history.
+- Base your next action only on the most recent user message.
+- Tool results will be provided in a message with the role `tool`.

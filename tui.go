@@ -337,6 +337,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if llmAction != nil {
+				// Populate the assistant's message with the tool call
+				m.messages[len(m.messages)-1].ToolCalls = []ToolCall{{
+					Function: FunctionCall{
+						Name:      llmAction.Tool,
+						Arguments: llmAction.Input,
+					},
+				}}
+				m.messages[len(m.messages)-1].Content = "" // Clear content as ToolCalls is primary
+
 				toolName := llmAction.Tool
 				isDestructive := toolName == "write_file" || toolName == "append_file" || toolName == "delete_file"
 
@@ -412,39 +421,30 @@ func (m *model) executeAndRespond(toolName string, input map[string]interface{})
 		return m, nil
 	}
 
-	// Format "Command Executed" and execute
-	m.messages[len(m.messages)-1].Content = fmt.Sprintf("**Command Executed**: `%s`", toolName)
+	// Execute the command
+	responseToLLM := m.commandHandler.ExecuteCommand(toolName, input)
 
-	if responseToLLM := m.commandHandler.ExecuteCommand(toolName, input); responseToLLM != "" {
-		// Find the last user message to provide context to the LLM.
-		var lastUserMessage string
-		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].Role == "user" {
-				lastUserMessage = m.messages[i].Content
-				break
-			}
-		}
+	// Append the tool result as a "tool" message
+	m.messages = append(m.messages, Message{Role: "tool", Content: responseToLLM})
 
-		// Construct the new message with the original user message and the tool results.
-		newContent := fmt.Sprintf("%s\n\nTool results for `%s`:\n%s", lastUserMessage, toolName, responseToLLM)
+	// Update the UI to show the command executed and its result
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
 
-		// ... start new stream ...
-		m.logger.Log(fmt.Sprintf("Response to LLM: %s", newContent))
-		m.messages = append(m.messages, Message{Role: "user", Content: newContent, DisplayContent: fmt.Sprintf("Tool results for `%s` sent to model.", toolName)})
+	// If there was a response to send to LLM, start a new stream
+	if responseToLLM != "" {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancel = cancel
 		m.sending = true
 		m.streaming = true
 		m.stream = make(chan interface{})
-		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+		m.messages = append(m.messages, Message{Role: "assistant", Content: ""}) // Prepare for assistant's next response
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
 	}
 
-	// If command had no response to send to LLM
-	m.viewport.SetContent(m.renderMessages())
-	m.viewport.GotoBottom()
+	// If command had no response to send to LLM, just return
 	return m, nil
 }
 
@@ -651,18 +651,25 @@ func (m *model) renderMessages() string {
 		if msg.Role == "system" {
 			continue
 		}
-		role := "## " + strings.Title(msg.Role)
 
+		var roleHeader string
 		var renderedMsg string
-		if msg.IsError {
-			md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, msg.Content))
-			content.WriteString(errorStyle.Render(md))
-			continue
+
+		if msg.Role == "tool" {
+			roleHeader = "## Tool Output"
+			renderedMsg = fmt.Sprintf("```\n%s\n```", msg.Content) // Render tool output as a code block
 		} else {
-			if msg.DisplayContent != "" {
-				renderedMsg = msg.DisplayContent
+			roleHeader = "## " + strings.Title(msg.Role)
+			if msg.IsError {
+				md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", roleHeader, msg.Content))
+				content.WriteString(errorStyle.Render(md))
+				continue
 			} else {
-				renderedMsg = msg.Content
+				if msg.DisplayContent != "" {
+					renderedMsg = msg.DisplayContent
+				} else {
+					renderedMsg = msg.Content
+				}
 			}
 		}
 
@@ -696,7 +703,7 @@ func (m *model) renderMessages() string {
 			continue
 		}
 
-		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", role, renderedMsg))
+		md, _ := r.Render(fmt.Sprintf("%s\n\n%s\n\n---", roleHeader, renderedMsg))
 		content.WriteString(md)
 	}
 	return content.String()
