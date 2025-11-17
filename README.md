@@ -49,6 +49,7 @@ The LLM is forced to use json as it's communication method via Prompt.MD and the
 - **Configurable initial Prompt** via `Prompt.MD`.
 - **Automatic model discovery** from your Ollama server.
 - **Inline file injection**: reference local files using `@filename` and their contents will be inserted into the conversation.
+- **Web Search using Duck Duck Go**: LLM is able to search using the web_Search command using [DuckDuckGo](https://duckduckgo.com/)
 - **Basic commands**:
   - `/help` – Show available commands  
   - `/bye` – Exit the application  
