@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"context"
@@ -7,6 +7,10 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"prompt-cli/internal/agent"
+	"prompt-cli/internal/logger"
+	"prompt-cli/internal/ollama"
+	"prompt-cli/internal/types"
 	"regexp"
 	"strings"
 	"sync"
@@ -60,19 +64,17 @@ const (
 	focusViewport
 )
 
-type model struct {
+type Model struct {
 	viewport          viewport.Model
 	textarea          textarea.Model
-	messages          []Message
-	apiURL            string
+	messages          []types.Message
 	modelName         string
 	modelContextSize  int64 // Store context window size
 	sending           bool
-	error             error
+	err               error
 	stats             string
 	focused           focusable
 	streaming         bool
-	aiResponse        string
 	stream            chan interface{}
 	cancel            context.CancelFunc
 	fileSearchActive  bool
@@ -81,19 +83,19 @@ type model struct {
 	files             []string
 	spinner           spinner.Model
 	wg                *sync.WaitGroup
-	logger            *Logger
-	commandHandler    *CommandHandler
-	ollamaClient      *OllamaClient
+	logger            *logger.Logger
+	agent             *agent.Agent
+	ollamaClient      *ollama.OllamaClient
 	history           []string
 	historyCursor     int
 	ctrlCpressed      bool
 	currentJoke       string
-	permissionRequest *Action         // Stores the command that needs permission. If nil, not waiting.
+	permissionRequest *types.Action         // Stores the command that needs permission. If nil, not waiting.
 	alwaysAllow       map[string]bool // Stores permissions for "Always Allow". Key combines toolName and relevant path.
 	yoloMode          bool            // When true, bypasses all permission checks.
 }
 
-func initialModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *Logger) *model {
+func NewModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *logger.Logger, agent *agent.Agent, ollamaClient *ollama.OllamaClient) *Model {
 	// --- Text Area (Input) ---
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Ctrl+V to paste)"
@@ -142,20 +144,16 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		fileNames = append(fileNames, file.Name())
 	}
 
-	//For some reason Role has to be "system" have to investiget this further why.
-
-	m := &model{
+	m := &Model{
 		textarea:         ta,
 		viewport:         vp,
-		messages:         []Message{{Role: "system", Content: systemPrompt}},
-		apiURL:           apiURL,
+		messages:         []types.Message{{Role: "system", Content: systemPrompt}},
 		modelName:        modelName,
 		modelContextSize: contextSize,
 		sending:          false,
 		stats:            "",
 		focused:          focusTextarea,
 		streaming:        false,
-		aiResponse:       "",
 		fileSearchActive: false,
 		fileSearchTerm:   "",
 		fileSearchResult: "",
@@ -163,22 +161,22 @@ func initialModel(apiURL, modelName string, contextSize int64, systemPrompt stri
 		spinner:          s,
 		wg:               &sync.WaitGroup{},
 		logger:           logger,
-		ollamaClient:     NewOllamaClient(apiURL, logger),
+		agent:            agent,
+		ollamaClient:     ollamaClient,
 		history:          []string{},
 		historyCursor:    -1,
 		alwaysAllow:      make(map[string]bool), // Initialize the map
 		yoloMode:         false,                 // Default to false
 	}
 
-	m.commandHandler = NewCommandHandler(m)
 	return m
 }
 
-func (m *model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		taCmd tea.Cmd
 		vpCmd tea.Cmd
@@ -250,7 +248,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				statusMsg = "YOLO mode disabled. Destructive commands will require permission."
 			}
-			m.messages = append(m.messages, Message{Role: "assistant", Content: statusMsg})
+			m.messages = append(m.messages, types.Message{Role: "assistant", Content: statusMsg})
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 			return m, nil
@@ -292,9 +290,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, vpCmd = m.viewport.Update(msg)
 		}
 
-	case streamChunkMsg:
+	case types.StreamChunkMsg:
 		if m.streaming {
-			// When the first chunk arrives, clear the joke.
 			if m.currentJoke != "" {
 				m.currentJoke = ""
 			}
@@ -302,44 +299,54 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 			m.wg.Done()
-			return m, waitForStreamCmd(m.stream)
+			return m, m.waitForStream()
 		}
 
-	case streamDoneMsg:
+	case types.StreamDoneMsg:
 		m.wg.Wait() // Wait for all chunks to be processed
 		if m.streaming {
 			m.streaming = false
 			m.sending = false
-			m.stats = msg.stats
+			m.stats = msg.Stats
 
-			finalMessage := msg.finalMessage // This is the full accumulated message
-			var llmAction *Action
+			finalMessage := msg.FinalMessage
+			var llmAction *types.Action
 
-			// Prefer native tool_calls format
+			// Check for native tool calls first
 			if len(finalMessage.ToolCalls) > 0 {
 				m.logger.Log("Found native tool_calls.")
-				call := finalMessage.ToolCalls[0] // Assuming one call
-				llmAction = &Action{
+				call := finalMessage.ToolCalls[0]
+				llmAction = &types.Action{
 					Tool:  call.Function.Name,
 					Input: call.Function.Arguments,
 				}
 			} else if finalMessage.Content != "" {
-				// Fallback for older action-in-content format
-				jsonStr, err := extractJSON(finalMessage.Content)
+				// If no native tool calls, try to parse the content for either a
+				// tool call or a simple message.
+				jsonStr, err := types.ExtractJSON(finalMessage.Content)
 				if err == nil {
-					var llmResponse LLMResponse
-					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil {
-						if llmResponse.Action.Tool != "" {
-							llmAction = &llmResponse.Action
+					// Attempt to parse as a tool call first
+					var llmResponse types.LLMResponse
+					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil && llmResponse.Action.Tool != "" {
+						llmAction = &llmResponse.Action
+					} else {
+						// If it's not a tool call, try to parse it as a simple message
+						var simpleMsg struct {
+							Message string `json:"message"`
+						}
+						if err := json.Unmarshal([]byte(jsonStr), &simpleMsg); err == nil && simpleMsg.Message != "" {
+							// It's a simple message, update the content
+							finalMessage.Content = simpleMsg.Message
+							m.messages[len(m.messages)-1].Content = simpleMsg.Message
 						}
 					}
 				}
 			}
 
 			if llmAction != nil {
-				// Populate the assistant's message with the tool call
-				m.messages[len(m.messages)-1].ToolCalls = []ToolCall{{
-					Function: FunctionCall{
+				// It's a tool call, handle it
+				m.messages[len(m.messages)-1].ToolCalls = []types.ToolCall{{
+					Function: types.FunctionCall{
 						Name:      llmAction.Tool,
 						Arguments: llmAction.Input,
 					},
@@ -364,19 +371,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.executeAndRespond(llmAction.Tool, llmAction.Input)
 			}
 
-			// If it wasn't a tool call, the content is just plain text.
+			// If it wasn't a tool call, just update the viewport with the (potentially modified) content
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
 		}
 
-	case errorMsg:
-		// If the error is due to context cancellation, we can ignore it,
-		// as the cancellation is handled by the Ctrl-C logic.
-		if strings.Contains(msg.err.Error(), "context canceled") {
+	case types.ErrorMsg:
+		if strings.Contains(msg.Err.Error(), "context canceled") {
 			return m, nil
 		}
 		m.sending = false
-		m.error = msg.err
+		m.err = msg.Err
 
 	case tea.WindowSizeMsg:
 		newWidth := msg.Width - 2
@@ -397,7 +402,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(taCmd, vpCmd)
 }
 
-func (m *model) executeAndRespond(toolName string, input map[string]interface{}) (tea.Model, tea.Cmd) {
+
+func (m *Model) executeAndRespond(toolName string, input map[string]interface{}) (tea.Model, tea.Cmd) {
 	if toolName == "respond" {
 		m.logger.Log("Handling 'respond' tool.")
 		var message string
@@ -422,10 +428,10 @@ func (m *model) executeAndRespond(toolName string, input map[string]interface{})
 	}
 
 	// Execute the command
-	responseToLLM := m.commandHandler.ExecuteCommand(toolName, input)
+	responseToLLM := m.agent.ExecuteCommand(toolName, input)
 
 	// Append the tool result as a "tool" message
-	m.messages = append(m.messages, Message{Role: "tool", Content: responseToLLM})
+	m.messages = append(m.messages, types.Message{Role: "tool", Content: responseToLLM})
 
 	// Update the UI to show the command executed and its result
 	m.viewport.SetContent(m.renderMessages())
@@ -438,17 +444,19 @@ func (m *model) executeAndRespond(toolName string, input map[string]interface{})
 		m.sending = true
 		m.streaming = true
 		m.stream = make(chan interface{})
-		m.messages = append(m.messages, Message{Role: "assistant", Content: ""}) // Prepare for assistant's next response
+		m.messages = append(m.messages, types.Message{Role: "assistant", Content: ""}) // Prepare for assistant's next response
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
-		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
+
+		m.ollamaClient.StartStream(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg)
+		return m, m.waitForStream()
 	}
 
 	// If command had no response to send to LLM, just return
 	return m, nil
 }
 
-func (m *model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focused != focusTextarea {
 		return m, nil
 	}
@@ -474,7 +482,7 @@ func (m *model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleTabKey() (tea.Model, tea.Cmd) {
+func (m *Model) handleTabKey() (tea.Model, tea.Cmd) {
 	if m.fileSearchActive && m.fileSearchResult != "" {
 		val := m.textarea.Value()
 		re := regexp.MustCompile(`@\w*$`)
@@ -486,7 +494,7 @@ func (m *model) handleTabKey() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleEscKey() (tea.Model, tea.Cmd) {
+func (m *Model) handleEscKey() (tea.Model, tea.Cmd) {
 	if m.focused == focusTextarea {
 		m.focused = focusViewport
 		m.textarea.Blur()
@@ -497,7 +505,7 @@ func (m *model) handleEscKey() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(msg)
 
@@ -522,7 +530,7 @@ func (m *model) handleTextInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, taCmd
 }
 
-func (m *model) handleEnter() (tea.Model, tea.Cmd) {
+func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	userInput := strings.TrimSpace(m.textarea.Value())
 	if userInput != "" {
 		m.history = append([]string{userInput}, m.history...)
@@ -549,13 +557,11 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 	if !m.sending {
 		switch userInput {
 		case "/new":
-			// Preserve the system prompt, which is the first message
 			if len(m.messages) > 0 {
-				m.messages = []Message{m.messages[0]}
+				m.messages = []types.Message{m.messages[0]}
 			} else {
-				m.messages = []Message{}
+				m.messages = []types.Message{}
 			}
-			// Clear any active streaming/sending state
 			if m.cancel != nil {
 				m.cancel()
 			}
@@ -564,7 +570,6 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 			m.stats = ""
 			m.currentJoke = ""
 
-			// Update the view
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
@@ -572,7 +577,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		case "/bye":
 			return m, tea.Quit
 		case "/help":
-			m.messages = append(m.messages, Message{Role: "assistant", Content: "Commands:\n/new - Start a new chat session\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file\n/copy - Copy the last response to the clipboard"})
+			m.messages = append(m.messages, types.Message{Role: "assistant", Content: "Commands:\n/new - Start a new chat session\n/bye - Exit the application\n/help - Show this help message\n/stop - Stop the current response\n/log - Toggle logging to a file\n/copy - Copy the last response to the clipboard"})
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
@@ -587,9 +592,9 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 			}
 			if lastResponse != "" {
 				clipboard.WriteAll(lastResponse)
-				m.messages = append(m.messages, Message{Role: "assistant", Content: "Copied last response to clipboard."})
+				m.messages = append(m.messages, types.Message{Role: "assistant", Content: "Copied last response to clipboard."})
 			} else {
-				m.messages = append(m.messages, Message{Role: "assistant", Content: "No response to copy."})
+				m.messages = append(m.messages, types.Message{Role: "assistant", Content: "No response to copy."})
 			}
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
@@ -597,14 +602,13 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/log":
 			logMsg := m.logger.Toggle()
-			m.messages = append(m.messages, Message{Role: "assistant", Content: logMsg})
+			m.messages = append(m.messages, types.Message{Role: "assistant", Content: logMsg})
 			m.viewport.SetContent(m.renderMessages())
 			m.textarea.Reset()
 			m.viewport.GotoBottom()
 			return m, nil
 		}
 
-		// Default action: send message
 		re := regexp.MustCompile(`@(\S+)`)
 		matches := re.FindAllStringSubmatch(userInput, -1)
 
@@ -614,7 +618,7 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 				fileName := match[1]
 				fileContent, err := os.ReadFile(fileName)
 				if err != nil {
-					continue // Keep @filename as is if file not found
+					continue
 				}
 				replacement := fmt.Sprintf("\n\n---\nFile: %s\n```\n%s\n```\n", fileName, string(fileContent))
 				processedInput = strings.Replace(processedInput, "@"+fileName, replacement, 1)
@@ -629,17 +633,29 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		m.stream = make(chan interface{})
 		m.currentJoke = devJokes[rand.Intn(len(devJokes))]
 		m.logger.Log(fmt.Sprintf("User input before sending to Ollama: %s", userInput))
-		m.messages = append(m.messages, Message{Role: "user", Content: userInput})
-		m.messages = append(m.messages, Message{Role: "assistant", Content: ""})
+		m.messages = append(m.messages, types.Message{Role: "user", Content: userInput})
+		m.messages = append(m.messages, types.Message{Role: "assistant", Content: ""})
 		m.viewport.SetContent(m.renderMessages())
 
 		m.textarea.Reset()
 		m.viewport.GotoBottom()
-		return m, tea.Batch(m.ollamaClient.startStreamCmd(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg), waitForStreamCmd(m.stream), m.spinner.Tick)
+
+		m.ollamaClient.StartStream(ctx, m.modelName, m.messages, m.modelContextSize, m.stream, m.wg)
+		return m, m.waitForStream()
 	}
 	return m, nil
 }
-func (m *model) renderMessages() string {
+
+func (m *Model) waitForStream() tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-m.stream
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+func (m *Model) renderMessages() string {
 	// Re-create renderer with the correct width, accounting for viewport padding
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
@@ -709,7 +725,7 @@ func (m *model) renderMessages() string {
 	return content.String()
 }
 
-func (m *model) updateFileList() {
+func (m *Model) updateFileList() {
 	files, err := os.ReadDir(".")
 	if err != nil {
 		log.Println("could not list files:", err)
@@ -724,7 +740,7 @@ func (m *model) updateFileList() {
 // calculateUsedTokens approximates the number of tokens used in the current chat history.
 // NOTE: This is a rough approximation using the heuristic of 3 words ~= 4 tokens.
 // A proper implementation would require a dedicated tokenizer for the specific model.
-func (m *model) calculateUsedTokens() int {
+func (m *Model) calculateUsedTokens() int {
 	totalWords := 0
 	for _, msg := range m.messages {
 		totalWords += len(strings.Fields(msg.Content))
@@ -734,7 +750,7 @@ func (m *model) calculateUsedTokens() int {
 }
 
 // renderCommandDetails formats a command (Action) into a human-readable string for the permission prompt.
-func (m *model) renderCommandDetails(action *Action) string {
+func (m *Model) renderCommandDetails(action *types.Action) string {
 	var details strings.Builder
 	details.WriteString(fmt.Sprintf("Tool: %s\n", action.Tool))
 
@@ -759,9 +775,9 @@ func (m *model) renderCommandDetails(action *Action) string {
 	return details.String()
 }
 
-func (m *model) View() string {
-	if m.error != nil {
-		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.error)
+func (m *Model) View() string {
+	if m.err != nil {
+		return fmt.Sprintf("An error occurred: %v\n\nPress Ctrl+C to quit.", m.err)
 	}
 
 	// If we are waiting for permission, show the permission prompt.

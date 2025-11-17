@@ -5,7 +5,7 @@
 // details, chat requests/responses, and a utility for
 // extracting JSON from noisy output.
 
-package main
+package types
 
 import (
 	"encoding/json"
@@ -151,10 +151,23 @@ type LLMResponse struct {
 	ToolCalls []ToolCall          `json:"tool_calls"`
 }
 
+// StreamChunkMsg represents a single chunk of streamed data.
+type StreamChunkMsg string
+
+// StreamDoneMsg signals that the stream has finished.
+type StreamDoneMsg struct {
+	Stats        string
+	FinalMessage Message
+}
+
+// ErrorMsg is a wrapper for errors that occur during the
+// stream handling process.
+type ErrorMsg struct{ Err error }
+
 // fixGitArgs normalises the "args" field in a git JSON payload so
 // that each argument is a separate string.  This is required by the
 // underlying command line interface.
-func fixGitArgs(jsonStr string) string {
+func FixGitArgs(jsonStr string) string {
 	// Case 1: "args": [-n 1]
 	re1 := regexp.MustCompile(`"args":\s*\[([^\]]*)\]`)
 	jsonStr = re1.ReplaceAllStringFunc(jsonStr, func(match string) string {
@@ -171,7 +184,7 @@ func fixGitArgs(jsonStr string) string {
 		parts := strings.Fields(content)
 		var newParts []string
 		for _, p := range parts {
-			escapedPart := strings.ReplaceAll(p, `"`, `\\"`)
+			escapedPart := strings.ReplaceAll(p, `"`, `\"`)
 			newParts = append(newParts, `"`+escapedPart+`"`)
 		}
 		return `"args": [` + strings.Join(newParts, ", ") + `]`
@@ -189,7 +202,7 @@ func fixGitArgs(jsonStr string) string {
 		parts := strings.Fields(content)
 		var newParts []string
 		for _, p := range parts {
-			escapedPart := strings.ReplaceAll(p, `"`, `\\"`)
+			escapedPart := strings.ReplaceAll(p, `"`, `\"`)
 			newParts = append(newParts, `"`+escapedPart+`"`)
 		}
 		return `"args": [` + strings.Join(newParts, ", ") + `]`
@@ -201,7 +214,7 @@ func fixGitArgs(jsonStr string) string {
 // extractJSON attempts to extract a valid JSON object from a string
 // that may contain noise or partial data.  It is used to parse
 // output from the chat endpoint.
-func extractJSON(s string) (string, error) {
+func ExtractJSON(s string) (string, error) {
 	s = strings.TrimSpace(s)
 
 	startIndex := strings.Index(s, "{")
@@ -227,7 +240,7 @@ func extractJSON(s string) (string, error) {
 			switch r {
 			case '{', '[':
 				stack = append(stack, r)
-			case '}':
+			case '}' :
 				if len(stack) > 0 && stack[len(stack)-1] == '{' {
 					stack = stack[:len(stack)-1]
 				}
@@ -258,7 +271,7 @@ func extractJSON(s string) (string, error) {
 		}
 	}
 	if inString {
-		s += "\""
+		s += `"`
 	}
 
 	var js map[string]interface{}

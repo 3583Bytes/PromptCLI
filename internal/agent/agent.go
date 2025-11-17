@@ -1,4 +1,4 @@
-package main
+package agent
 
 import (
 	"bytes"
@@ -8,50 +8,51 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"prompt-cli/internal/logger"
 	"strings"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// CommandHandler is responsible for executing commands received from the LLM.
-type CommandHandler struct {
-	model *model
+// Agent is responsible for executing commands received from the LLM.
+type Agent struct {
+	logger *logger.Logger
 }
 
-// NewCommandHandler creates a new CommandHandler.
-func NewCommandHandler(m *model) *CommandHandler {
-	return &CommandHandler{model: m}
+// NewAgent creates a new Agent.
+func NewAgent(logger *logger.Logger) *Agent {
+	return &Agent{logger: logger}
 }
 
 // ExecuteCommand processes the LLM response and executes the specified command.
-func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]interface{}) string {
+func (a *Agent) ExecuteCommand(toolName string, input map[string]interface{}) string {
 	if toolName == "" {
 		return "" // Do nothing if the tool name is empty
 	}
 	switch toolName {
 	case "write_file":
-		return ch.handleWriteFile(input)
+		return a.HandleWriteFile(input)
 	case "read_file":
-		return ch.handleReadFile(input)
+		return a.HandleReadFile(input)
 	case "read_all_files":
-		return ch.handleReadAllFiles(input)
+		return a.HandleReadAllFiles(input)
 	case "list_files":
-		return ch.handleListFiles(input)
+		return a.HandleListFiles(input)
 	case "delete_file":
-		return ch.handleDeleteFile(input)
+		return a.HandleDeleteFile(input)
 	case "append_file":
-		return ch.handleAppendFile(input)
+		return a.HandleAppendFile(input)
 	case "git":
-		return ch.handleGit(input)
+		return a.HandleGit(input)
 	case "web_search":
-		return ch.handleWebSearch(input)
+		return a.HandleWebSearch(input)
 	case "visit_url":
-		return ch.handleVisitURL(input)
+		return a.HandleVisitURL(input)
 	case "respond":
 		// This is handled by the UI, but we can log it here.
 		if msg, ok := input["message"].(string); ok {
-			ch.model.logger.Log(msg)
+			a.logger.Log(msg)
 		}
 		return "" // No further action needed from the handler
 	default:
@@ -59,12 +60,12 @@ func (ch *CommandHandler) ExecuteCommand(toolName string, input map[string]inter
 	}
 }
 
-func (ch *CommandHandler) handleVisitURL(input map[string]interface{}) string {
+func (a *Agent) HandleVisitURL(input map[string]interface{}) string {
 	url, ok := input["url"].(string)
 	if !ok {
 		return "Error: 'url' not specified or not a string for visit_url."
 	}
-	ch.model.logger.Log(fmt.Sprintf("handleVisitURL url: %s", url))
+	a.logger.Log(fmt.Sprintf("HandleVisitURL url: %s", url))
 
 	maxBytes, _ := input["max_bytes"].(float64)
 
@@ -85,7 +86,7 @@ func (ch *CommandHandler) handleVisitURL(input map[string]interface{}) string {
 		return fmt.Sprintf("Request to %s failed with status code: %d", url, res.StatusCode)
 	}
 
-	text, err := extractTextFromHTML(res.Body)
+	text, err := ExtractTextFromHTML(res.Body)
 	if err != nil {
 		return fmt.Sprintf("Error extracting text from %s: %v", url, err)
 	}
@@ -97,14 +98,14 @@ func (ch *CommandHandler) handleVisitURL(input map[string]interface{}) string {
 	return text
 }
 
-func (ch *CommandHandler) handleWebSearch(input map[string]interface{}) string {
+func (a *Agent) HandleWebSearch(input map[string]interface{}) string {
 	query, ok := input["q"].(string)
 	if !ok {
 		return "Error: 'q' not specified or not a string for web_search."
 	}
-	ch.model.logger.Log(fmt.Sprintf("handleWebSearch query: %s", query))
+	a.logger.Log(fmt.Sprintf("HandleWebSearch query: %s", query))
 
-	results, err := performWebSearch(query, ch.model.logger)
+	results, err := PerformWebSearch(query, a.logger)
 	if err != nil {
 		return fmt.Sprintf("Error performing web search: %v", err)
 	}
@@ -112,7 +113,7 @@ func (ch *CommandHandler) handleWebSearch(input map[string]interface{}) string {
 	return results
 }
 
-func (ch *CommandHandler) handleReadFile(input map[string]interface{}) string {
+func (a *Agent) HandleReadFile(input map[string]interface{}) string {
 	path, ok := input["path"].(string)
 	if !ok {
 		return "Error: 'path' not specified or not a string for read_file."
@@ -126,7 +127,7 @@ func (ch *CommandHandler) handleReadFile(input map[string]interface{}) string {
 	return string(content)
 }
 
-func (ch *CommandHandler) handleReadAllFiles(input map[string]interface{}) string {
+func (a *Agent) HandleReadAllFiles(input map[string]interface{}) string {
 	glob, ok := input["glob"].(string)
 	if !ok || glob == "" {
 		return "Error: 'glob' pattern not specified or not a string for read_all_files."
@@ -157,7 +158,7 @@ func (ch *CommandHandler) handleReadAllFiles(input map[string]interface{}) strin
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			// Log the error but continue with other files
-			ch.model.logger.Log(fmt.Sprintf("Error reading file '%s', skipping: %v", fullPath, err))
+			a.logger.Log(fmt.Sprintf("Error reading file '%s', skipping: %v", fullPath, err))
 			continue
 		}
 
@@ -177,7 +178,7 @@ func (ch *CommandHandler) handleReadAllFiles(input map[string]interface{}) strin
 	return output
 }
 
-func (ch *CommandHandler) handleWriteFile(input map[string]interface{}) string {
+func (a *Agent) HandleWriteFile(input map[string]interface{}) string {
 	path, ok := input["path"].(string)
 	if !ok {
 		return "Error: 'path' not specified or not a string for write_file."
@@ -211,11 +212,10 @@ func (ch *CommandHandler) handleWriteFile(input map[string]interface{}) string {
 		}
 	}
 
-	ch.model.updateFileList()
 	return responseToLLM
 }
 
-func (ch *CommandHandler) handleAppendFile(input map[string]interface{}) string {
+func (a *Agent) HandleAppendFile(input map[string]interface{}) string {
 	path, ok := input["path"].(string)
 	if !ok {
 		return "Error: 'path' not specified or not a string for append_file."
@@ -235,11 +235,10 @@ func (ch *CommandHandler) handleAppendFile(input map[string]interface{}) string 
 		return fmt.Sprintf("Error appending to file '%s': %v", path, err)
 	}
 
-	ch.model.updateFileList()
 	return fmt.Sprintf("Content appended to file '%s' successfully.", path)
 }
 
-func (ch *CommandHandler) handleDeleteFile(input map[string]interface{}) string {
+func (a *Agent) HandleDeleteFile(input map[string]interface{}) string {
 	path, ok := input["path"].(string)
 	if !ok {
 		return "Error: 'path' not specified or not a string for delete_file."
@@ -250,12 +249,11 @@ func (ch *CommandHandler) handleDeleteFile(input map[string]interface{}) string 
 		return fmt.Sprintf("Error deleting file '%s': %v", path, err)
 	}
 
-	ch.model.updateFileList()
 	return fmt.Sprintf("File '%s' deleted successfully.", path)
 }
 
-func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
-	ch.model.logger.Log(fmt.Sprintf("handleListFiles input: %v", input))
+func (a *Agent) HandleListFiles(input map[string]interface{}) string {
+	a.logger.Log(fmt.Sprintf("handleListFiles input: %v", input))
 	path, _ := input["path"].(string)
 	if path == "" {
 		path = "."
@@ -283,11 +281,11 @@ func (ch *CommandHandler) handleListFiles(input map[string]interface{}) string {
 	}
 
 	result := fmt.Sprintf("Files in '%s':\n%s", path, strings.Join(fileNames, "\n"))
-	ch.model.logger.Log(fmt.Sprintf("handleListFiles output: %s", result))
+	a.logger.Log(fmt.Sprintf("handleListFiles output: %s", result))
 	return result
 }
 
-func (ch *CommandHandler) handleGit(input map[string]interface{}) string {
+func (a *Agent) HandleGit(input map[string]interface{}) string {
 	cmd, ok := input["cmd"].(string)
 	if !ok {
 		return "Error: 'cmd' not specified or not a string for git."

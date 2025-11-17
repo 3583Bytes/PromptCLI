@@ -10,27 +10,14 @@ import (
 	"strconv"
 	"strings"
 
-	"prompt-cli/config"
+	"prompt-cli/internal/agent"
+	"prompt-cli/internal/config"
+	"prompt-cli/internal/logger"
+	"prompt-cli/internal/ollama"
+	"prompt-cli/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// streamChunkMsg represents a single chunk of streamed data.
-// It is sent to the TUI when a new chunk arrives.
-type streamChunkMsg string
-
-// streamDoneMsg signals that the stream has finished.
-// It carries the aggregated statistics and the final
-// response message.
-type streamDoneMsg struct {
-	stats        string
-	finalMessage Message
-}
-
-// errorMsg is a wrapper for errors that occur during the
-// stream handling process. It can be sent to the UI as a
-// tea.Msg.
-type errorMsg struct{ err error }
 
 // loadPrompt reads the contents of the prompt file located at the given path.
 // It returns the file content as a string and any error that occurs.
@@ -68,11 +55,11 @@ func main() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
-	logger := NewLogger()
+	appLogger := logger.NewLogger()
 	if configs.LogEnabled {
-		logger.Toggle()
+		appLogger.Toggle()
 	}
-	logger.Setup()
+	appLogger.Setup()
 
 	// Construct the base URL for the Ollama server, adding the HTTP scheme if missing.
 	var baseURL string
@@ -82,10 +69,10 @@ func main() {
 		baseURL = fmt.Sprintf("http://%s:%d", configs.OllamaServerURL, configs.OllamaServerPort)
 	}
 
-	logger.Log(fmt.Sprintf("Connecting to Ollama at: %s", baseURL))
+	appLogger.Log(fmt.Sprintf("Connecting to Ollama at: %s", baseURL))
 
 	// Retrieve the list of available models from the Ollama server.
-	models, err := getModels(baseURL, logger)
+	models, err := ollama.GetModels(baseURL, appLogger)
 	if err != nil {
 		log.Fatalf("Error getting models: %v", err)
 	}
@@ -133,9 +120,10 @@ func main() {
 		}
 	}
 
-	// Initialize the Bubble Tea model with the gathered configuration.
-	// The contextSize is now taken directly from the config file.
-	m := initialModel(baseURL, selectedModel, configs.ContextLength, systemPrompt, configs.LogEnabled, logger)
+	// Initialize the components.
+	ollamaClient := ollama.NewOllamaClient(baseURL, appLogger)
+	appAgent := agent.NewAgent(appLogger)
+	m := tui.NewModel(baseURL, selectedModel, configs.ContextLength, systemPrompt, configs.LogEnabled, appLogger, appAgent, ollamaClient)
 
 	// Create a new Bubble Tea program with alternate screen and mouse support.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())

@@ -1,18 +1,20 @@
-package main
+package ollama
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"prompt-cli/internal/logger"
+	"prompt-cli/internal/types"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// getModels retrieves the list of available models from the
+// GetModels retrieves the list of available models from the
 // Ollama server by issuing a GET request to /api/tags.
-func getModels(baseURL string, logger *Logger) ([]Model, error) {
+func GetModels(baseURL string, logger *logger.Logger) ([]types.Model, error) {
 	logger.Log(fmt.Sprintf("Attempting to get models from %s/api/tags", baseURL))
 
 	client := &http.Client{
@@ -28,16 +30,16 @@ func getModels(baseURL string, logger *Logger) ([]Model, error) {
 
 	logger.Log(fmt.Sprintf("Got response status: %s", resp.Status))
 
-	var tagsResponse TagsResponse
+	var tagsResponse types.TagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tagsResponse); err != nil {
 		return nil, err
 	}
 	return tagsResponse.Models, nil
 }
 
-// getModelDetails fetches the detailed information for a single
+// GetModelDetails fetches the detailed information for a single
 // model by POSTing the model name to /api/show.
-func getModelDetails(baseURL, modelName string) (*ShowModelResponse, error) {
+func GetModelDetails(baseURL, modelName string) (*types.ShowModelResponse, error) {
 	// Create request body
 	requestBody, err := json.Marshal(map[string]string{
 		"model": modelName,
@@ -56,20 +58,20 @@ func getModelDetails(baseURL, modelName string) (*ShowModelResponse, error) {
 		return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
 	}
 
-	var modelResponse ShowModelResponse
+	var modelResponse types.ShowModelResponse
 	if err := json.NewDecoder(resp.Body).Decode(&modelResponse); err != nil {
 		return nil, err
 	}
 	return &modelResponse, nil
 }
 
-// extractContextLength extracts the context length from a
+// ExtractContextLength extracts the context length from a
 // ModelInfo structure. Because different model architectures
 // expose the context length under different field names, this
 // function checks the architecture string and pulls the value
 // from the appropriate field. If the architecture is
 // unknown, it falls back to checking all known fields.
-func extractContextLength(modelInfo *ModelInfo) int64 {
+func ExtractContextLength(modelInfo *types.ModelInfo) int64 {
 	// Determine the architecture in a case‑insensitive way.
 	arch := strings.ToLower(modelInfo.Architecture)
 
@@ -78,25 +80,25 @@ func extractContextLength(modelInfo *ModelInfo) int64 {
 	// Ollama’s own SDKs.
 	switch arch {
 	case "llama", "llama2", "llama3":
-		return convertToInteger(modelInfo.LlamaContextLength)
+		return ConvertToInteger(modelInfo.LlamaContextLength)
 	case "gemma", "gemma2", "gemma3":
-		return convertToInteger(modelInfo.GemmaContextLength)
+		return ConvertToInteger(modelInfo.GemmaContextLength)
 	case "mistral":
-		return convertToInteger(modelInfo.MistralContextLength)
+		return ConvertToInteger(modelInfo.MistralContextLength)
 	case "gptoss": // gpt‑oss models
-		return convertToInteger(modelInfo.GptossContextLength)
+		return ConvertToInteger(modelInfo.GptossContextLength)
 	default:
 		// Architecture not recognised – try each known field.
-		if result := convertToInteger(modelInfo.LlamaContextLength); result > 0 {
+		if result := ConvertToInteger(modelInfo.LlamaContextLength); result > 0 {
 			return result
 		}
-		if result := convertToInteger(modelInfo.GemmaContextLength); result > 0 {
+		if result := ConvertToInteger(modelInfo.GemmaContextLength); result > 0 {
 			return result
 		}
-		if result := convertToInteger(modelInfo.MistralContextLength); result > 0 {
+		if result := ConvertToInteger(modelInfo.MistralContextLength); result > 0 {
 			return result
 		}
-		if result := convertToInteger(modelInfo.GptossContextLength); result > 0 {
+		if result := ConvertToInteger(modelInfo.GptossContextLength); result > 0 {
 			return result
 		}
 	}
@@ -104,11 +106,11 @@ func extractContextLength(modelInfo *ModelInfo) int64 {
 	return 0
 }
 
-// convertToInteger safely converts an arbitrary interface{} value
+// ConvertToInteger safely converts an arbitrary interface{} value
 // into an int64. The function handles common numeric types as
 // well as string representations of integers. If the conversion
 // fails, it returns 0.
-func convertToInteger(value interface{}) int64 {
+func ConvertToInteger(value interface{}) int64 {
 	if value == nil {
 		return 0
 	}

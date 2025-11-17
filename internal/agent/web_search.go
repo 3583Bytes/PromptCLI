@@ -1,10 +1,11 @@
-package main
+package agent
 
 import (
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"prompt-cli/internal/logger"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -14,7 +15,7 @@ type searchResult struct {
 	title, link, snippet string
 }
 
-func performWebSearch(query string, logger *Logger) (string, error) {
+func PerformWebSearch(query string, logger *logger.Logger) (string, error) {
 	logger.Log(fmt.Sprintf("performWebSearch query: %s", query))
 
 	// 1. Construct the search URL
@@ -163,7 +164,7 @@ func getText(n *html.Node) string {
 	return strings.TrimSpace(text.String())
 }
 
-func extractTextFromHTML(r io.Reader) (string, error) {
+func ExtractTextFromHTML(r io.Reader) (string, error) {
 	doc, err := html.Parse(r)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse HTML: %w", err)
