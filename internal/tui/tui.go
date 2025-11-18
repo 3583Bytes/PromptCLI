@@ -394,10 +394,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		newWidth := msg.Width
-		textAreaRenderedHeight := m.textarea.Height() + 2 + 1
-		m.textarea.SetWidth(newWidth)
+
+		// Set widths of components. The viewport is full width, but the textarea needs to be slightly narrower.
 		m.viewport.Width = newWidth
-		m.viewport.Height = msg.Height - textAreaRenderedHeight
+		m.textarea.SetWidth(newWidth - 2)
+
+		// Get the rendered height of the textarea and footer.
+		occupiedHeight := lipgloss.Height(m.textarea.View()) + 1 // +1 for the footer
+
+		// Set the viewport height.
+		m.viewport.Height = msg.Height - occupiedHeight
+
+		// Update content and pass messages.
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 		m.textarea, taCmd = m.textarea.Update(msg)

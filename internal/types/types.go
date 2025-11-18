@@ -211,9 +211,10 @@ func FixGitArgs(jsonStr string) string {
 	return jsonStr
 }
 
-// extractJSON attempts to extract a valid JSON object from a string
-// that may contain noise or partial data.  It is used to parse
-// output from the chat endpoint.
+// extractJSON attempts to extract a valid JSON object from a string that may
+// contain noise or partial data. It is used to parse output from the chat
+// endpoint. This implementation is designed to be robust against common LLM
+// errors, such as mismatched brackets and trailing commas.
 func ExtractJSON(s string) (string, error) {
 	s = strings.TrimSpace(s)
 
@@ -223,16 +224,28 @@ func ExtractJSON(s string) (string, error) {
 	}
 	s = s[startIndex:]
 
+	var result strings.Builder
 	var stack []rune
 	inString := false
 	isEscaped := false
 
-	for i, r := range s {
+	// Regex to find and remove trailing commas
+	reTrailingComma := regexp.MustCompile(`,(\s*[\}\]])`)
+
+	for _, r := range s {
+		// Always write the rune to the builder unless it's a mismatched closer.
+		// We handle string state first.
 		if isEscaped {
 			isEscaped = false
-		} else if r == '\\' {
+			result.WriteRune(r)
+			continue
+		}
+		if r == '\\' {
 			isEscaped = true
-		} else if r == '"' {
+			result.WriteRune(r)
+			continue
+		}
+		if r == '"' {
 			inString = !inString
 		}
 
@@ -240,44 +253,59 @@ func ExtractJSON(s string) (string, error) {
 			switch r {
 			case '{', '[':
 				stack = append(stack, r)
-			case '}' :
+			case '}':
 				if len(stack) > 0 && stack[len(stack)-1] == '{' {
 					stack = stack[:len(stack)-1]
+				} else {
+					continue // Skip mismatched '}'
 				}
 			case ']':
 				if len(stack) > 0 && stack[len(stack)-1] == '[' {
 					stack = stack[:len(stack)-1]
+				} else {
+					continue // Skip mismatched ']'
 				}
 			}
 		}
 
+		result.WriteRune(r)
+
+		// If the stack is empty and we've just processed a '}', we might have a complete object.
 		if len(stack) == 0 && !inString && r == '}' {
-			potentialJSON := s[:i+1]
+			potentialJSON := result.String()
+			cleanedJSON := reTrailingComma.ReplaceAllString(potentialJSON, "$1")
+
 			var js map[string]interface{}
-			if json.Unmarshal([]byte(potentialJSON), &js) == nil {
-				return potentialJSON, nil
+			if json.Unmarshal([]byte(cleanedJSON), &js) == nil {
+				// It's a valid JSON object. Return it.
+				return cleanedJSON, nil
 			}
 		}
 	}
 
-	// If we're here, the JSON is likely truncated. Let's try to close it.
+	// If we've reached the end of the string, the JSON might be truncated.
+	// Let's try to close any open structures.
+	finalJSONStr := result.String()
 	for len(stack) > 0 {
 		top := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if top == '{' {
-			s += "}"
+			finalJSONStr += "}"
 		} else if top == '[' {
-			s += "]"
+			finalJSONStr += "]"
 		}
 	}
 	if inString {
-		s += `"`
+		finalJSONStr += `"`
 	}
 
+	// Clean up any trailing commas in the potentially fixed string.
+	cleanedJSON := reTrailingComma.ReplaceAllString(finalJSONStr, "$1")
 	var js map[string]interface{}
-	if json.Unmarshal([]byte(s), &js) == nil {
-		return s, nil
+	if json.Unmarshal([]byte(cleanedJSON), &js) == nil {
+		return cleanedJSON, nil
 	}
 
+	// If all attempts to parse fail, return an empty JSON object.
 	return "{}", nil
 }
