@@ -393,9 +393,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.Err
 
 	case tea.WindowSizeMsg:
-		newWidth := msg.Width - 2
+		newWidth := msg.Width
 		textAreaRenderedHeight := m.textarea.Height() + 2 + 1
-		m.textarea.SetWidth(newWidth - 2)
+		m.textarea.SetWidth(newWidth)
 		m.viewport.Width = newWidth
 		m.viewport.Height = msg.Height - textAreaRenderedHeight
 		m.viewport.SetContent(m.renderMessages())
