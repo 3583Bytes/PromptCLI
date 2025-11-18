@@ -90,9 +90,10 @@ type Model struct {
 	historyCursor     int
 	ctrlCpressed      bool
 	currentJoke       string
-	permissionRequest *types.Action         // Stores the command that needs permission. If nil, not waiting.
+	permissionRequest *types.Action   // Stores the command that needs permission. If nil, not waiting.
 	alwaysAllow       map[string]bool // Stores permissions for "Always Allow". Key combines toolName and relevant path.
 	yoloMode          bool            // When true, bypasses all permission checks.
+	isJsonResponse    bool            // Flag to indicate if the current stream is a JSON response
 }
 
 func NewModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *logger.Logger, agent *agent.Agent, ollamaClient *ollama.OllamaClient) *Model {
@@ -167,6 +168,7 @@ func NewModel(apiURL, modelName string, contextSize int64, systemPrompt string, 
 		historyCursor:    -1,
 		alwaysAllow:      make(map[string]bool), // Initialize the map
 		yoloMode:         false,                 // Default to false
+		isJsonResponse:   false,
 	}
 
 	return m
@@ -295,9 +297,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.currentJoke != "" {
 				m.currentJoke = ""
 			}
-			m.messages[len(m.messages)-1].Content += string(msg)
-			m.viewport.SetContent(m.renderMessages())
-			m.viewport.GotoBottom()
+
+			// On the first chunk, determine if this is a JSON response
+			if m.messages[len(m.messages)-1].Content == "" {
+				if strings.Contains(string(msg), `{"version"`) {
+					m.isJsonResponse = true
+				}
+			}
+
+			// If it's not a JSON response, stream the text to the UI
+			if !m.isJsonResponse {
+				m.messages[len(m.messages)-1].Content += string(msg)
+				m.viewport.SetContent(m.renderMessages())
+				m.viewport.GotoBottom()
+			}
+
+			// We still need to process the waitgroup and listen for the next chunk
 			m.wg.Done()
 			return m, m.waitForStream()
 		}
@@ -307,6 +322,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming {
 			m.streaming = false
 			m.sending = false
+			m.isJsonResponse = false // Reset the flag
 			m.stats = msg.Stats
 
 			finalMessage := msg.FinalMessage
@@ -339,15 +355,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							llmAction = &llmResponse.Action
 						}
 					} else {
-						// If it's not a tool call, try to parse it as a simple message
-						var simpleMsg struct {
-							Message string `json:"message"`
-						}
-						if err := json.Unmarshal([]byte(jsonStr), &simpleMsg); err == nil && simpleMsg.Message != "" {
-							// It's a simple message, update the content
-							finalMessage.Content = simpleMsg.Message
-							m.messages[len(m.messages)-1].Content = simpleMsg.Message
-						}
+						// If it's not a tool call, it might be a simple message that was buffered
+						// because it was mistaken for JSON. Or it's just a plain text response.
+						// In either case, the final accumulated content is the source of truth.
+						m.messages[len(m.messages)-1].Content = finalMessage.Content
 					}
 				}
 			}
@@ -418,7 +429,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(taCmd, vpCmd)
 }
-
 
 func (m *Model) executeAndRespond(toolName string, input map[string]interface{}) (tea.Model, tea.Cmd) {
 	if toolName == "respond" {
@@ -647,6 +657,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.cancel = cancel
 		m.sending = true
 		m.streaming = true
+		m.isJsonResponse = false // Reset the flag for the new message
 		m.stream = make(chan interface{})
 		m.currentJoke = devJokes[rand.Intn(len(devJokes))]
 		m.logger.Log(fmt.Sprintf("User input before sending to Ollama: %s", userInput))
@@ -827,7 +838,7 @@ func (m *Model) View() string {
 		}
 		leftFooter = footerStyle.Render(footerText)
 	} else {
-		stats := "Response time and token stats will appear here."
+		stats := "Tokens/sec: N/AThi"
 		if m.stats != "" {
 			stats = m.stats
 		}
