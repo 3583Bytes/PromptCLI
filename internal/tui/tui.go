@@ -328,7 +328,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Attempt to parse as a tool call first
 					var llmResponse types.LLMResponse
 					if err := json.Unmarshal([]byte(jsonStr), &llmResponse); err == nil && llmResponse.Action.Tool != "" {
-						llmAction = &llmResponse.Action
+						if llmResponse.Action.Tool == "respond" {
+							// This is a final answer, not a tool call to execute
+							if msgStr, ok := llmResponse.Action.Input["message"].(string); ok {
+								// Update the message content directly
+								m.messages[len(m.messages)-1].Content = msgStr
+							}
+							// We're done, no further action needed.
+						} else {
+							llmAction = &llmResponse.Action
+						}
 					} else {
 						// If it's not a tool call, try to parse it as a simple message
 						var simpleMsg struct {
