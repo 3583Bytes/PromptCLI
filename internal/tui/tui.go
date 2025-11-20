@@ -838,7 +838,7 @@ func (m *Model) View() string {
 		}
 		leftFooter = footerStyle.Render(footerText)
 	} else {
-		stats := "Tokens/sec: N/AThi"
+		stats := "Tokens/sec: N/A "
 		if m.stats != "" {
 			stats = m.stats
 		}
