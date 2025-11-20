@@ -103,6 +103,7 @@ func NewModel(apiURL, modelName string, contextSize int64, systemPrompt string, 
 	ta.Focus()
 	ta.Prompt = ""
 	ta.SetHeight(3)
+	ta.CharLimit = 0
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(false) // Use Enter to send
