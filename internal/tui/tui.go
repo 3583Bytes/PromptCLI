@@ -94,6 +94,7 @@ type Model struct {
 	alwaysAllow       map[string]bool // Stores permissions for "Always Allow". Key combines toolName and relevant path.
 	yoloMode          bool            // When true, bypasses all permission checks.
 	isJsonResponse    bool            // Flag to indicate if the current stream is a JSON response
+	escPressedOnce  bool
 }
 
 func NewModel(apiURL, modelName string, contextSize int64, systemPrompt string, logEnabled bool, logger *logger.Logger, agent *agent.Agent, ollamaClient *ollama.OllamaClient) *Model {
@@ -232,6 +233,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		return m, vpCmd
 	case tea.KeyMsg:
+		// Reset escPressedOnce if any other key is pressed
+		if msg.Type != tea.KeyEsc {
+			m.escPressedOnce = false
+		}
+
 		if m.ctrlCpressed {
 			switch msg.Type {
 			case tea.KeyCtrlC:
@@ -283,7 +289,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleTabKey()
 		case tea.KeyEsc:
 			m.ctrlCpressed = false
-			return m.handleEscKey()
+
+			if m.escPressedOnce {
+				m.textarea.Reset()
+				m.escPressedOnce = false
+				return m, nil
+			} else {
+				m.escPressedOnce = true
+				// Do not call m.handleEscKey() here.
+				// This ensures that a single Escape press does not toggle focus.
+				return m, nil
+			}
 		}
 
 		if m.focused == focusTextarea {
