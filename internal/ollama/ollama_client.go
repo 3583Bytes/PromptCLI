@@ -103,6 +103,15 @@ func (c *OllamaClient) StartStream(ctx context.Context, modelName string, messag
 			}
 		}
 
+		// Attempt to parse the accumulated message content as JSON
+		var nestedMessage struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(accumulatedMessage.Content), &nestedMessage); err == nil {
+			// If parsing is successful, use the nested message content
+			accumulatedMessage.Content = nestedMessage.Message
+		}
+
 		duration := time.Since(startTime)
 		tokensPerSecond := 0.0
 		if duration.Seconds() > 0 {
