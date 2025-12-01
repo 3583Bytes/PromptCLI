@@ -281,9 +281,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == focusTextarea {
 				return m.handleEnter()
 			}
-		case tea.KeyUp, tea.KeyDown:
-			m.ctrlCpressed = false
-			return m.handleArrowKeys(msg)
 		case tea.KeyTab:
 			m.ctrlCpressed = false
 			return m.handleTabKey()
@@ -300,6 +297,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// This ensures that a single Escape press does not toggle focus.
 				return m, nil
 			}
+		}
+
+		switch msg.Type {
+		case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
+			return m.handleArrowKeys(msg)
 		}
 
 		if m.focused == focusTextarea {
@@ -501,29 +503,44 @@ func (m *Model) executeAndRespond(toolName string, input map[string]interface{})
 }
 
 func (m *Model) handleArrowKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	if m.focused != focusTextarea {
-		return m, nil
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
 	}
+
+	// If the textarea is focused, we handle arrow keys
+	isAtFirstLine := m.textarea.Line() == 0
+	isAtLastLine := m.textarea.Line() == m.textarea.LineCount()-1
+
 	switch msg.Type {
 	case tea.KeyUp:
-		if len(m.history) > 0 {
-			if m.historyCursor < len(m.history)-1 {
-				m.historyCursor++
+		if isAtFirstLine {
+			if len(m.history) > 0 {
+				if m.historyCursor < len(m.history)-1 {
+					m.historyCursor++
+				}
+				m.textarea.SetValue(m.history[m.historyCursor])
+				m.textarea.CursorEnd()
 			}
-			m.textarea.SetValue(m.history[m.historyCursor])
-			m.textarea.CursorEnd()
+			return m, nil
 		}
 	case tea.KeyDown:
-		if m.historyCursor > 0 {
-			m.historyCursor--
-			m.textarea.SetValue(m.history[m.historyCursor])
-			m.textarea.CursorEnd()
-		} else {
-			m.historyCursor = -1
-			m.textarea.Reset()
+		if isAtLastLine {
+			if m.historyCursor > 0 {
+				m.historyCursor--
+				m.textarea.SetValue(m.history[m.historyCursor])
+				m.textarea.CursorEnd()
+			} else {
+				m.historyCursor = -1
+				m.textarea.Reset()
+			}
+			return m, nil
 		}
 	}
-	return m, nil
+
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, cmd
 }
 
 func (m *Model) handleTabKey() (tea.Model, tea.Cmd) {
