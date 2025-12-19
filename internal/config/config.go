@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"prompt-cli/internal/errors"
 )
 
 // Config holds the application configuration
@@ -20,13 +21,13 @@ type Config struct {
 func LoadConfig(path string) (*Config, error) {
 	// Check if the config file exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file does not exist: %s", path)
+		return nil, errors.IOError(fmt.Sprintf("Config file does not exist: %s", path), err)
 	}
 
 	// Open the config file
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open config file: %w", err)
+		return nil, errors.IOError("Failed to open config file", err)
 	}
 	defer file.Close()
 
@@ -36,7 +37,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Decode the JSON into the config struct
 	if err := decoder.Decode(config); err != nil {
-		return nil, fmt.Errorf("failed to decode config file: %w", err)
+		return nil, errors.ParseError("Failed to decode config file", err)
 	}
 
 	// Set default values if not specified

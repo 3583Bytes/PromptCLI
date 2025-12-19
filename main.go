@@ -12,6 +12,7 @@ import (
 
 	"prompt-cli/internal/agent"
 	"prompt-cli/internal/config"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"prompt-cli/internal/ollama"
 	"prompt-cli/internal/tui"
@@ -37,7 +38,7 @@ func main() {
 	// Determine the directory of the running executable.
 	exePath, err := os.Executable()
 	if err != nil {
-		log.Fatalf("Error finding executable path: %v", err)
+		log.Fatalf("Error finding executable path: %v", errors.IOError("Failed to get executable path", err))
 	}
 	exeDir := filepath.Dir(exePath)
 
@@ -47,12 +48,22 @@ func main() {
 	// Load configuration from the JSON file.
 	configs, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Error loading config from %s: %v", configPath, err)
+		var appErr *errors.AppError
+		if ok := errors.As(err, &appErr); ok {
+			log.Fatalf("Error loading config from %s: %s (type: %s)", configPath, appErr.Message, appErr.Type)
+		} else {
+			log.Fatalf("Error loading config from %s: %v", configPath, err)
+		}
 	}
 
 	// Validate the loaded configuration to ensure required fields are set.
 	if err := config.ValidateConfig(configs); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		var appErr *errors.AppError
+		if ok := errors.As(err, &appErr); ok {
+			log.Fatalf("Invalid configuration: %s (type: %s)", appErr.Message, appErr.Type)
+		} else {
+			log.Fatalf("Invalid configuration: %v", err)
+		}
 	}
 
 	appLogger := logger.NewLogger()
@@ -74,10 +85,18 @@ func main() {
 	// Retrieve the list of available models from the Ollama server.
 	models, err := ollama.GetModels(baseURL, appLogger)
 	if err != nil {
-		log.Fatalf("Error getting models: %v", err)
+		var appErr *errors.AppError
+		if ok := errors.As(err, &appErr); ok {
+			log.Fatalf("Error getting models: %s (type: %s)", appErr.Message, appErr.Type)
+		} else {
+			log.Fatalf("Error getting models: %v", err)
+		}
 	}
 	if len(models) == 0 {
-		log.Fatal("No models found on the Ollama server.")
+		log.Fatal(errors.ValidationError("No models found on the Ollama server", map[string]interface{}{
+			"server": baseURL,
+			"action": "model_discovery",
+		}).Error())
 	}
 
 	flag.Parse()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"prompt-cli/internal/types"
 	"strconv"
@@ -24,15 +25,19 @@ func GetModels(baseURL string, logger *logger.Logger) ([]types.Model, error) {
 	resp, err := client.Get(baseURL + "/api/tags")
 	if err != nil {
 		logger.Log(fmt.Sprintf("Error getting models: %v", err))
-		return nil, err
+		return nil, errors.NetworkError("Failed to fetch models from Ollama server", err)
 	}
 	defer resp.Body.Close()
 
 	logger.Log(fmt.Sprintf("Got response status: %s", resp.Status))
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.NetworkError(fmt.Sprintf("Ollama server returned status: %s", resp.Status), nil)
+	}
+
 	var tagsResponse types.TagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tagsResponse); err != nil {
-		return nil, err
+		return nil, errors.ParseError("Failed to parse models response", err)
 	}
 	return tagsResponse.Models, nil
 }

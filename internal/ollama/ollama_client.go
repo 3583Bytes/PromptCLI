@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"prompt-cli/internal/types"
 	"sync"
@@ -43,7 +44,11 @@ func (c *OllamaClient) StartStream(ctx context.Context, modelName string, messag
 		}
 		reqBody, err := json.Marshal(req)
 		if err != nil {
-			stream <- types.ErrorMsg{Err: err}
+			c.logger.Log(fmt.Sprintf("Error marshaling request: %v", err))
+			stream <- types.NewErrorMsg(errors.ParseError("Failed to marshal chat request", err), "parse_error", map[string]interface{}{
+				"operation": "marshal_request",
+				"model":     modelName,
+			})
 			return
 		}
 
@@ -51,15 +56,22 @@ func (c *OllamaClient) StartStream(ctx context.Context, modelName string, messag
 
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.apiURL+"/api/chat", bytes.NewBuffer(reqBody))
 		if err != nil {
-			c.logger.Log(fmt.Sprintf("Error creating request: %v", err))
-			stream <- types.ErrorMsg{Err: err}
+			c.logger.Log(fmt.Sprintf("Error creating HTTP request: %v", err))
+			stream <- types.NewErrorMsg(errors.NetworkError("Failed to create HTTP request", err), "network_error", map[string]interface{}{
+				"operation": "create_request",
+				"url":       c.apiURL + "/api/chat",
+			})
 			return
 		}
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
-			c.logger.Log(fmt.Sprintf("Error sending request: %v", err))
-			stream <- types.ErrorMsg{Err: err}
+			c.logger.Log(fmt.Sprintf("Error sending HTTP request: %v", err))
+			stream <- types.NewErrorMsg(errors.NetworkError("Failed to send request to Ollama API", err), "network_error", map[string]interface{}{
+				"operation": "send_request",
+				"url":       c.apiURL + "/api/chat",
+				"model":     modelName,
+			})
 			return
 		}
 		defer resp.Body.Close()
@@ -76,7 +88,11 @@ func (c *OllamaClient) StartStream(ctx context.Context, modelName string, messag
 			if err := decoder.Decode(&chatResp); err == io.EOF {
 				break
 			} else if err != nil {
-				stream <- types.ErrorMsg{Err: fmt.Errorf("error decoding stream chunk: %v", err)}
+				c.logger.Log(fmt.Sprintf("Error decoding stream chunk: %v", err))
+				stream <- types.NewErrorMsg(errors.ParseError("Failed to decode stream chunk", err), "parse_error", map[string]interface{}{
+					"operation": "decode_stream_chunk",
+					"model":     modelName,
+				})
 				break
 			}
 

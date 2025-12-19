@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"strings"
 
@@ -25,25 +26,25 @@ func PerformWebSearch(query string, logger *logger.Logger) (string, error) {
 	// 2. Make the HTTP request
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create search request: %w", err)
+		return "", errors.NetworkError("Failed to create search request", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36")
 
 	client := &http.Client{}
 	res, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to perform search request: %w", err)
+		return "", errors.NetworkError("Failed to perform search request", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		return "", fmt.Errorf("search request failed with status code: %d", res.StatusCode)
+		return "", errors.NetworkError(fmt.Sprintf("Search request failed with status code: %d", res.StatusCode), nil)
 	}
 
 	// 3. Parse the HTML response
 	doc, err := html.Parse(res.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse HTML response: %w", err)
+		return "", errors.ParseError("Failed to parse HTML response", err)
 	}
 
 	// 4. Find and extract search results

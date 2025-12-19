@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"prompt-cli/internal/agent"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"prompt-cli/internal/ollama"
 	"prompt-cli/internal/types"
@@ -421,6 +422,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sending = false
 		m.err = msg.Err
+		
+		// Handle the new ErrorMsg structure with additional context
+		var errorDetails string
+		if msg.ErrorType != "" {
+			errorDetails = fmt.Sprintf("Error (%s): %s", msg.ErrorType, msg.Err)
+			if msg.Context != nil {
+				contextStr := fmt.Sprintf("Context: %v", msg.Context)
+				errorDetails = fmt.Sprintf("%s\n%s", errorDetails, contextStr)
+			}
+		} else {
+			// Check if it's a structured AppError
+			var appErr *errors.AppError
+			if ok := errors.As(msg.Err, &appErr); ok {
+				errorDetails = fmt.Sprintf("Error (%s): %s", appErr.Type, appErr.Message)
+				if appErr.Context != nil {
+					contextStr := fmt.Sprintf("Context: %v", appErr.Context)
+					errorDetails = fmt.Sprintf("%s\n%s", errorDetails, contextStr)
+				}
+			} else {
+				errorDetails = fmt.Sprintf("Error: %v", msg.Err)
+			}
+		}
+		
+		m.messages = append(m.messages, types.Message{
+			Role:    "assistant",
+			Content: errorDetails,
+			IsError: true,
+		})
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
 
 	case tea.WindowSizeMsg:
 		newWidth := msg.Width

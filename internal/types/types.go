@@ -162,7 +162,21 @@ type StreamDoneMsg struct {
 
 // ErrorMsg is a wrapper for errors that occur during the
 // stream handling process.
-type ErrorMsg struct{ Err error }
+type ErrorMsg struct {
+	Err error
+	// Optional fields for additional error context
+	ErrorType string
+	Context   map[string]interface{}
+}
+
+// NewErrorMsg creates a new ErrorMsg with optional context
+func NewErrorMsg(err error, errorType string, context map[string]interface{}) ErrorMsg {
+	return ErrorMsg{
+		Err:       err,
+		ErrorType: errorType,
+		Context:   context,
+	}
+}
 
 // fixGitArgs normalises the "args" field in a git JSON payload so
 // that each argument is a separate string.  This is required by the

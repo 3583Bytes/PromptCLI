@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"prompt-cli/internal/errors"
 	"prompt-cli/internal/logger"
 	"strings"
 	"time"
@@ -116,12 +117,22 @@ func (a *Agent) HandleWebSearch(input map[string]interface{}) string {
 func (a *Agent) HandleReadFile(input map[string]interface{}) string {
 	path, ok := input["path"].(string)
 	if !ok {
-		return "Error: 'path' not specified or not a string for read_file."
+		return errors.ValidationError("Invalid input: 'path' must be a string", map[string]interface{}{
+			"expected": "string",
+			"received": fmt.Sprintf("%T", input["path"]),
+			"tool":     "read_file",
+		}).Error()
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("Error reading file '%s': %v", path, err)
+		if os.IsNotExist(err) {
+			return errors.IOError("File not found", err).Error()
+		}
+		if os.IsPermission(err) {
+			return errors.PermissionError(fmt.Sprintf("Permission denied reading file '%s'", path)).Error()
+		}
+		return errors.IOError(fmt.Sprintf("Error reading file '%s'", path), err).Error()
 	}
 
 	return string(content)
